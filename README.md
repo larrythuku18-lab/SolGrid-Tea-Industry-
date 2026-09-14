@@ -24,6 +24,9 @@ bridge, and solar-generation ingestion (steps 4–6) are not built yet — see
 - **Auth**: JWT (access + refresh), password hashing via werkzeug, a
   `SECURITY DEFINER` `auth_lookup_user()` function for the one legitimate
   cross-tenant read (looking up which org an email belongs to at login).
+- **Facilities** (`GET/POST /api/v1/facilities`): list and admin-create,
+  needed once a second facility (e.g. Gatitu) has to be added past the one
+  `seed-org` creates.
 - **Tier-4 ledger ingestion**, web-form channel: `POST/GET
   /api/v1/ledger/energy-readings` and `/production-records`.
 - **Benchmark engine** (`GET /api/v1/benchmark`): cost/kg tea, kWh/kg tea,
@@ -31,6 +34,10 @@ bridge, and solar-generation ingestion (steps 4–6) are not built yet — see
 - **Scenario engine** (`POST /api/v1/scenarios`): the pure-solar what-if
   calculation from architecture doc §5 — addressable share, savings,
   payback (capex mode) or rate spread (PPA mode), avoided grid emissions.
+- **Frontend** (`frontend/`) — React + TypeScript console covering all of
+  the above: Overview, Ledger, Benchmark, Scenarios. Built in the real
+  Meridian design system (dark plum/amber, Bricolage Grotesque + Hanken
+  Grotesk + JetBrains Mono), not a new look — see `frontend/README.md`.
 - Unit tests for the calculation engine and ledger validation (no
   infrastructure needed); integration tests for RLS isolation and the
   benchmark engine (need a live database, auto-skip otherwise).
@@ -115,6 +122,11 @@ itself, since that requires the real TimescaleDB extension. Run `alembic
 upgrade head` against `docker compose up db` on a machine with normal
 network access before treating this as fully verified.
 
+The frontend was verified the same way: backend + frontend + this same
+plain-Postgres substitute run together, driven with a real headless
+Chromium (Playwright) through login and all four pages, screenshotted, with
+zero browser console errors.
+
 ## What's next (architecture doc §9, steps 4–6)
 
 - **SMS/USSD ingestion** via Africa's Talking — same `EnergyReadingCreate`
@@ -128,5 +140,8 @@ network access before treating this as fully verified.
 - **Thermal-efficiency scenario** (fuelwood reduction) — deliberately not
   implemented. The doc cites a 15–30% sector-wide range but no formula; see
   the module docstring in `solgrid_tea/services/calculation_engine.py`.
-- A frontend — none exists yet. The API is what a Meridian-design-system
-  React app per §7 would call.
+- Frontend gaps: no facility-management beyond add (no edit/deactivate
+  UI), no report/passport view (backend doesn't have one yet either), no
+  role-management UI for inviting additional `app_user` accounts (there's
+  no invite endpoint yet — new users currently need direct DB access or a
+  future admin endpoint).

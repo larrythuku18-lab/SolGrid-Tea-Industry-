@@ -10,6 +10,7 @@ from sqlalchemy import text
 from werkzeug.security import check_password_hash
 
 from solgrid_tea.extensions import db, limiter
+from solgrid_tea.models import AppUser, Organization
 from solgrid_tea.schemas.auth import LoginRequest, TokenResponse
 from solgrid_tea.security import tenant_scoped
 
@@ -68,4 +69,12 @@ def refresh():
 @auth_bp.get("/me")
 @tenant_scoped()
 def me():
-    return jsonify(user_id=g.current_user_id, org_id=g.current_org_id, role=g.current_role)
+    user = db.session.get(AppUser, g.current_user_id)
+    org = db.session.get(Organization, g.current_org_id)
+    return jsonify(
+        user_id=g.current_user_id,
+        org_id=g.current_org_id,
+        role=g.current_role,
+        email=user.email if user else None,
+        organization_name=org.name if org else None,
+    )

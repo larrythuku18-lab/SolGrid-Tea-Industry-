@@ -18,12 +18,14 @@ def create_app(config_name: str | None = None) -> Flask:
 
     from .blueprints.auth import auth_bp
     from .blueprints.benchmark import benchmark_bp
+    from .blueprints.facility import facility_bp
     from .blueprints.health import health_bp
     from .blueprints.ledger import ledger_bp
     from .blueprints.scenario import scenario_bp
 
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp, url_prefix="/api/v1/auth")
+    app.register_blueprint(facility_bp, url_prefix="/api/v1/facilities")
     app.register_blueprint(ledger_bp, url_prefix="/api/v1/ledger")
     app.register_blueprint(benchmark_bp, url_prefix="/api/v1/benchmark")
     app.register_blueprint(scenario_bp, url_prefix="/api/v1/scenarios")
