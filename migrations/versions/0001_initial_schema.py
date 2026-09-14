@@ -46,11 +46,21 @@ Deviations from the architecture doc, and why:
   number the doc's own principle (§0.2: versioned, sourced, never hardcoded
   in code) says shouldn't be a Python constant.
 
+- energy_reading degrades to an ordinary table instead of hard-failing when
+  the timescaledb extension isn't installed on the target Postgres server
+  (see _enable_timescaledb_if_installed below). Not a doc deviation, a
+  portability fix: a contributor without easy access to the TimescaleDB
+  image (this one included — pulling it hit an unreachable-IPv6-address
+  DNS quirk) can still run every migration and every test that doesn't
+  specifically depend on hypertable partitioning. Production must still
+  run against real TimescaleDB to get that partitioning.
+
 Revision ID: 0001
 Revises:
 Create Date: 2026-09-14
 """
 
+import sqlalchemy as sa
 from alembic import op
 
 revision = "0001"
@@ -60,7 +70,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE EXTENSION IF NOT EXISTS timescaledb;")
+    timescaledb_available = _enable_timescaledb_if_installed()
 
     op.execute(
         """
@@ -154,7 +164,15 @@ def upgrade() -> None:
         );
         """
     )
-    op.execute("SELECT create_hypertable('energy_reading', 'period_start');")
+    if timescaledb_available:
+        op.execute("SELECT create_hypertable('energy_reading', 'period_start');")
+    else:
+        print(
+            "WARNING: timescaledb extension is not installed on this Postgres "
+            "server. energy_reading was created as an ordinary table, not a "
+            "hypertable — fine for local development, but production must run "
+            "against a real TimescaleDB instance to get time-partitioning."
+        )
     op.execute(
         """
         CREATE INDEX ix_energy_reading_facility_period
@@ -374,3 +392,21 @@ def downgrade() -> None:
     # timescaledb extension intentionally left in place — dropping a shared
     # cluster extension from a migration downgrade is a bigger blast radius
     # than this migration should take responsibility for.
+
+
+def _enable_timescaledb_if_installed() -> bool:
+    """True if the timescaledb extension is installed on this Postgres server
+    (and now enabled on this database) — false if it simply isn't available,
+    e.g. a plain postgres:16 image used for local dev/CI. `CREATE EXTENSION
+    IF NOT EXISTS` only guards against "already enabled"; it still raises if
+    the extension was never installed on the server at all, and a raised
+    exception mid-migration would otherwise abort the whole transaction. The
+    SAVEPOINT here contains that failure so the rest of the migration can
+    keep going with an ordinary (non-hypertable) energy_reading table."""
+    bind = op.get_bind()
+    try:
+        with bind.begin_nested():
+            bind.execute(sa.text("CREATE EXTENSION IF NOT EXISTS timescaledb"))
+    except Exception:
+        return False
+    return True

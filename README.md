@@ -111,21 +111,46 @@ docker compose up -d db && TEST_DATABASE_URL=postgresql+psycopg://solgrid_app:so
 DB-marked tests (`-m db`) skip automatically, not fail, if no database is
 reachable.
 
-**Sandbox note**: this was built and tested in an environment without
-network access to Docker Hub for the `timescale/timescaledb` image
-specifically. Every RLS policy, trigger, function, and grant in the
-migration was validated against a live Postgres 16 instance end-to-end
-(schema apply, tenant isolation, cross-tenant insert rejection, full HTTP
-request cycle from login through ledger writes to a scenario run) — the one
-thing *not* directly verified here is the `create_hypertable(...)` call
-itself, since that requires the real TimescaleDB extension. Run `alembic
-upgrade head` against `docker compose up db` on a machine with normal
-network access before treating this as fully verified.
+### If `docker compose up -d db` hangs or fails pulling the image
 
-The frontend was verified the same way: backend + frontend + this same
-plain-Postgres substitute run together, driven with a real headless
-Chromium (Playwright) through login and all four pages, screenshotted, with
-zero browser console errors.
+This was built and tested in an environment where pulling
+`timescale/timescaledb` from Docker Hub reliably hung. Root cause: that
+host's Docker Hub DNS returns both IPv4 and IPv6 addresses, but the host
+had no real IPv6 route (only link-local) — Docker occasionally picked the
+unreachable IPv6 address and hung with `network is unreachable`. If you hit
+the same thing:
+
+```bash
+echo "precedence ::ffff:0:0/96  100" | sudo tee -a /etc/gai.conf
+```
+
+This tells the system resolver to prefer IPv4 over IPv6 system-wide when
+both are available. No service restart needed — it applies to the next
+`docker pull`. This isn't Docker-specific; it fixes the same class of
+problem for any tool on a host with this networking quirk.
+
+If you'd rather not touch system config, or the extension genuinely isn't
+available yet: the migration (`migrations/versions/0001_initial_schema.py`)
+detects whether `timescaledb` is installed and degrades gracefully —
+`energy_reading` is created as an ordinary table instead of a hypertable,
+with a printed warning, rather than failing the migration. Everything else
+(RLS, triggers, the ledger/benchmark/scenario/facilities API, the frontend)
+works identically either way; you only lose TimescaleDB's time-partitioning,
+which matters for production data volume, not for local development. Point
+`docker-compose.yml`'s `db` service at `postgres:16-alpine` instead of
+`timescale/timescaledb:latest-pg16` to use this path.
+
+**What was and wasn't verified here**: every RLS policy, trigger, function,
+and grant in the migration was validated against a live Postgres 16
+instance end-to-end (schema apply, tenant isolation, cross-tenant insert
+rejection, full HTTP request cycle from login through ledger writes to a
+scenario run), including the graceful-degradation path above via the real
+`alembic upgrade head` command. The frontend was verified the same way —
+backend + this same plain-Postgres stand-in + the Vite dev server, driven
+with headless Chromium (Playwright) through login and all four pages,
+screenshotted, zero browser console errors. What's *not* verified here:
+real hypertable partitioning behavior, since that needs the actual
+TimescaleDB extension, which this environment couldn't pull.
 
 ## What's next (architecture doc §9, steps 4–6)
 
