@@ -1,0 +1,41 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: solgrid_tea
+      # This becomes a cluster superuser via the official Postgres image's
+      # bootstrap process. It is the migrations/admin role only — the
+      # running app never connects as this user (see .env.example). A
+      # managed Postgres in production should instead create solgrid_owner
+      # as a plain (non-super) database owner, per scripts/bootstrap_db_roles.sql.
+      POSTGRES_USER: solgrid_owner
+      POSTGRES_PASSWORD: solgrid_owner_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/bootstrap_db_roles.sql:/docker-entrypoint-initdb.d/10-bootstrap-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U solgrid_owner -d solgrid_tea"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://solgrid_app:solgrid_app_password@db:5432/solgrid_tea
+      MIGRATIONS_DATABASE_URL: postgresql+psycopg://solgrid_owner:solgrid_owner_password@db:5432/solgrid_tea
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head && gunicorn -w 4 -b 0.0.0.0:8000 wsgi:app"
+
+volumes:
+  pgdata:
