@@ -2,6 +2,7 @@
 testpaths = ["tests"]
 markers = [
     "db: requires a live Postgres+TimescaleDB (docker-compose up db)",
+    "live_llm: makes a real Anthropic API call (needs ANTHROPIC_API_KEY + credit balance); skips cleanly otherwise",
 ]
 
 [tool.black]

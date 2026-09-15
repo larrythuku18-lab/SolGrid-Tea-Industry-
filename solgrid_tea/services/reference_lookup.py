@@ -3,7 +3,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from solgrid_tea.models import EmissionFactor
+from solgrid_tea.models import EmissionFactor, EnergyContentFactor
 
 
 def latest_emission_factor(session: Session, fuel_type: str, as_of: date) -> EmissionFactor | None:
@@ -11,5 +11,19 @@ def latest_emission_factor(session: Session, fuel_type: str, as_of: date) -> Emi
         select(EmissionFactor)
         .where(EmissionFactor.fuel_type == fuel_type, EmissionFactor.effective_from <= as_of)
         .order_by(EmissionFactor.effective_from.desc())
+        .limit(1)
+    ).first()
+
+
+def latest_energy_content_factor(
+    session: Session, fuel_type: str, as_of: date
+) -> EnergyContentFactor | None:
+    return session.scalars(
+        select(EnergyContentFactor)
+        .where(
+            EnergyContentFactor.fuel_type == fuel_type,
+            EnergyContentFactor.effective_from <= as_of,
+        )
+        .order_by(EnergyContentFactor.effective_from.desc())
         .limit(1)
     ).first()

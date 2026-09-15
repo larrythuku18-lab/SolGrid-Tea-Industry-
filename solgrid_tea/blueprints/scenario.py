@@ -31,11 +31,27 @@ def create_scenario():
             status_code=409,
         )
 
+    fuelwood_factor = None
+    if scenario_input.fuelwood_reduction_pct is not None:
+        fuelwood_factor = latest_emission_factor(db.session, "fuelwood", date.today())
+        if fuelwood_factor is None:
+            raise DomainError(
+                "no fuelwood emission factor is on file — seed reference data first",
+                status_code=409,
+            )
+
     result = run_solar_scenario(
         scenario_input,
         grid_emission_factor_kg_per_kwh=float(factor.kg_co2_per_unit),
         grid_emission_factor_id=factor.id,
         grid_emission_factor_methodology_note=factor.methodology_note,
+        fuelwood_emission_factor_kg_per_m3=(
+            float(fuelwood_factor.kg_co2_per_unit) if fuelwood_factor else None
+        ),
+        fuelwood_emission_factor_id=fuelwood_factor.id if fuelwood_factor else None,
+        fuelwood_emission_factor_methodology_note=(
+            fuelwood_factor.methodology_note if fuelwood_factor else None
+        ),
     )
 
     run = ScenarioRun(

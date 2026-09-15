@@ -30,6 +30,42 @@ class ScenarioInput(BaseModel):
         gt=0, description="Electrical + thermal (fuelwood etc.), kWh-equivalent"
     )
 
+    # Thermal-efficiency add-on (architecture doc §5's "fuelwood reduction,
+    # modeled separately"). Optional, and deliberately additive to solar
+    # rather than runnable on its own — see calculation_engine.py's module
+    # docstring for why this is a stated operator target, not a system
+    # prediction: there's no validated formula for predicting a reduction
+    # from a practice change, so the system doesn't invent one. It only
+    # computes the deterministic cost/emissions consequence of a reduction
+    # the operator already believes is achievable.
+    fuelwood_reduction_pct: float | None = Field(
+        default=None,
+        gt=0,
+        le=100,
+        description=(
+            "Operator-stated achievable fuelwood volume reduction — "
+            "a judgment call, not a system estimate"
+        ),
+    )
+    baseline_annual_fuelwood_m3: float | None = Field(default=None, gt=0)
+    fuelwood_price_kes_per_m3: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _check_thermal_fields(self):
+        thermal_fields = (
+            self.fuelwood_reduction_pct,
+            self.baseline_annual_fuelwood_m3,
+            self.fuelwood_price_kes_per_m3,
+        )
+        if any(f is not None for f in thermal_fields) and not all(
+            f is not None for f in thermal_fields
+        ):
+            raise ValueError(
+                "fuelwood_reduction_pct, baseline_annual_fuelwood_m3, and "
+                "fuelwood_price_kes_per_m3 must be given together or not at all"
+            )
+        return self
+
     @model_validator(mode="after")
     def _check_financing_fields(self):
         if self.financing_mode == "ppa" and self.ppa_rate_kes_per_kwh is None:
@@ -57,14 +93,26 @@ class ScenarioResult(BaseModel):
     addressable_kwh: float
     addressable_electrical_share_pct: float
     addressable_of_total_energy_pct: float
+    # Solar-only savings, deliberately not combined with
+    # fuelwood_cost_savings_kes below: payback_years is capex_kes divided by
+    # this figure, and capex only buys the solar installation. Folding
+    # unrelated fuelwood savings in would make solar's payback look faster
+    # than the solar investment itself actually recovers — a report reader
+    # can add the two savings figures for a bottom line without that
+    # distortion; the engine won't do it for them silently.
     annual_savings_kes: float
     payback_years: float | None
     emissions_avoided_grid_tco2: float
     emissions_avoided_fuelwood_tco2: float
     fuelwood_reduction_m3: float
+    fuelwood_cost_savings_kes: float
     # The exact emission_factor row used, not a free-text version tag — a
     # UUID is the only fully unambiguous pointer back to the reference data
     # that produced emissions_avoided_grid_tco2 (rows are immutable; a
     # correction is a new row with a later effective_from, never an update).
     grid_emission_factor_id: UUID
     grid_emission_factor_methodology_note: str
+    # Null unless a thermal-efficiency component actually ran — same
+    # traceability guarantee as the grid factor above, extended to fuelwood.
+    fuelwood_emission_factor_id: UUID | None
+    fuelwood_emission_factor_methodology_note: str | None

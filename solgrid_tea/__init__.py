@@ -21,6 +21,7 @@ def create_app(config_name: str | None = None) -> Flask:
     from .blueprints.facility import facility_bp
     from .blueprints.health import health_bp
     from .blueprints.ledger import ledger_bp
+    from .blueprints.report import report_bp
     from .blueprints.scenario import scenario_bp
 
     app.register_blueprint(health_bp)
@@ -29,6 +30,7 @@ def create_app(config_name: str | None = None) -> Flask:
     app.register_blueprint(ledger_bp, url_prefix="/api/v1/ledger")
     app.register_blueprint(benchmark_bp, url_prefix="/api/v1/benchmark")
     app.register_blueprint(scenario_bp, url_prefix="/api/v1/scenarios")
+    app.register_blueprint(report_bp, url_prefix="/api/v1/reports")
 
     from . import cli as cli_module
 

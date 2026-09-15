@@ -7,9 +7,9 @@ new `organization` row, not a rewrite.
 
 This build follows the architecture doc's own §9 sequencing: schema + RLS +
 Tier-4 web ingestion first, then the benchmark layer, then the scenario
-engine. SMS/USSD ingestion, the report_snapshot/Conservation Passport
-bridge, and solar-generation ingestion (steps 4–6) are not built yet — see
-**What's next** below.
+engine, then the report_snapshot/Conservation Passport bridge. SMS/USSD
+ingestion and solar-generation ingestion (steps 4 and 6) are not built yet
+— see **What's next** below.
 
 ## What's built
 
@@ -33,14 +33,44 @@ bridge, and solar-generation ingestion (steps 4–6) are not built yet — see
   energy mix %, for a facility and period.
 - **Scenario engine** (`POST /api/v1/scenarios`): the pure-solar what-if
   calculation from architecture doc §5 — addressable share, savings,
-  payback (capex mode) or rate spread (PPA mode), avoided grid emissions.
+  payback (capex mode) or rate spread (PPA mode), avoided grid emissions —
+  plus an optional **thermal-efficiency add-on** in the same request: an
+  operator-stated fuelwood reduction % (their judgment, not a system
+  prediction — see the calculation engine's module docstring) produces a
+  deterministic cost and emissions delta, reported alongside but never
+  folded into the solar savings/payback figures.
+- **Extraction assist** (`POST /api/v1/ledger/extract`): photographs a
+  KPLC bill, fuelwood delivery note, or production record and proposes
+  field values (with per-field confidence, never a value below 0.7) for a
+  human to review before submitting through the unchanged ledger
+  write endpoints. Never writes to the ledger itself, never stores the
+  photo. See **AI features** below for what's actually verified.
+- **`report_snapshot` publish + pre-publish checks** (`POST/GET
+  /api/v1/reports`): architecture doc §6 — internal (full detail) vs.
+  external (curated, no raw KES) payload tiers, gated by three checks: a
+  plain-code completeness check (is there ledger data for this period at
+  all), an LLM plausibility check (flags a genuine deviation from the
+  trailing 6 periods — skips itself, not silently passes, when there's no
+  history yet to compare against), and a non-overridable placeholder-data
+  check that refuses to publish any figure traced back to a
+  `PLACEHOLDER`-flagged `emission_factor` or `energy_content_factor` row.
+  The first two are overridable with a logged `override_reason`; the third
+  is not.
 - **Frontend** (`frontend/`) — React + TypeScript console covering all of
   the above: Overview, Ledger, Benchmark, Scenarios. Built in the real
   Meridian design system (dark plum/amber, Bricolage Grotesque + Hanken
   Grotesk + JetBrains Mono), not a new look — see `frontend/README.md`.
-- Unit tests for the calculation engine and ledger validation (no
-  infrastructure needed); integration tests for RLS isolation and the
-  benchmark engine (need a live database, auto-skip otherwise).
+- Unit tests for the calculation engine, ledger validation, extraction
+  guardrails, and the plausibility check's skip logic (no infrastructure
+  needed); integration tests for RLS isolation, the benchmark engine, and
+  the report engine (need a live database, auto-skip otherwise); a
+  live-API extraction test against a synthetic image (needs
+  `ANTHROPIC_API_KEY` + credit balance, skips otherwise — see **AI
+  features**).
+
+The frontend does not yet have UI for extraction or reports — both are
+API-only for now, same status as any other backend-ahead-of-frontend gap
+listed below.
 
 ## Deviations from the architecture doc
 
@@ -75,6 +105,28 @@ and repeated here so it's not buried in code comments:
    normal function call and does accept one. This is not a doc deviation so
    much as something the doc couldn't have caught without running it — worth
    flagging because it would have silently broken tenant isolation.
+6. **Thermal-efficiency scenario is a solar-only add-on, not standalone.**
+   The doc's §5 table calls fuelwood reduction "modeled separately," which
+   could read as its own scenario type with no solar involved. Built the
+   other way — `ScenarioInput`'s solar fields stay mandatory, thermal
+   fields are optional extras on top — a deliberate, smaller scope decision
+   (see the build brief this was built from), not something the doc itself
+   settled.
+7. **Emissions in `report_snapshot` exclude fuelwood.** Grid electricity and
+   diesel get a real emissions figure; fuelwood doesn't, because biogenic
+   combustion emissions need a deliberate accounting-standard choice
+   (biogenic vs. LULUCF-linked) that nobody has made yet — same reasoning
+   `cli.py`'s `seed-reference-data` already uses to skip seeding a fuelwood
+   `emission_factor` row. The report engine picks up a fuelwood factor
+   automatically once one exists; nothing about this is hardcoded to stay
+   this way.
+8. **`report_snapshot.methodology_version` versions the report-building
+   method, not any individual figure.** Per-figure traceability (which
+   emission_factor row produced a number) lives inside the payload itself —
+   same pattern the scenario engine already uses (`grid_emission_factor_id`
+   alongside `emissions_avoided_grid_tco2`). A single TEXT column can't
+   itemize multiple reference rows, so it was never going to serve both
+   jobs.
 
 ## Local setup
 
@@ -99,7 +151,43 @@ Run the full app via Docker instead with `docker compose up --build`.
 deliberately seeds the Kenya grid `emission_factor` and the fuelwood
 `energy_content_factor` as flagged `PLACEHOLDER` rows (see their
 `methodology_note`). Replace both with sourced figures before a number
-derived from them goes near the Conservation Passport or a brand.
+derived from them goes near the Conservation Passport or a brand — and
+note that `report_snapshot` publishing already refuses to do this for you
+automatically (see the placeholder-data check above); this note is about
+the scenario engine and benchmark endpoints, which don't have that gate.
+
+## AI features
+
+Three features use Claude, per `SolGrid-Tea-AI-Prompts.md`. Set
+`ANTHROPIC_API_KEY` in `.env` to use any of them — the SDK reads it
+straight from the environment, nothing else to configure.
+
+1. **Extraction assist** (`solgrid_tea/services/extraction.py`) — vision
+   call, structured JSON output, confidence-gated (anything under 0.7
+   comes back `null`, enforced in code as well as by the prompt).
+2. **Pre-publish plausibility check**
+   (`solgrid_tea/services/plausibility_check.py`) — text-only, flags a
+   period only when it's a genuine outlier against trailing history; skips
+   itself entirely (not "checked and clean") when there's no trailing
+   history yet.
+3. Scenario explainer (`SolGrid-Tea-AI-Prompts.md` §3) — **not built**.
+   The prompt and tool contract are written; wiring a chat surface to it
+   wasn't in scope for this pass.
+
+**What was and wasn't verified**: this account's `ANTHROPIC_API_KEY` has
+zero credit balance, so no live call has actually completed here — every
+guardrail (confidence floor, `document_type` override, the plausibility
+skip logic, error handling) is verified with the Anthropic client mocked
+out, and the full HTTP path (auth → RLS → request validation → the actual
+API call) was confirmed to reach the real API and fail *only* on the
+credit-balance error, not on anything in this codebase. `tests/
+test_extraction_live.py` makes a real call against a synthetically-drawn
+image and skips cleanly if it can't complete — a pass there confirms the
+plumbing, not extraction accuracy. **No real photographed KPLC bill,
+fuelwood note, or production record has been tested against this prompt.**
+Per the build brief this was built from: extraction quality is unverified
+until that happens, and the 0.7 confidence threshold is a starting guess
+that needs calibrating against real misreads once it does.
 
 ### Tests
 
@@ -152,21 +240,22 @@ screenshotted, zero browser console errors. What's *not* verified here:
 real hypertable partitioning behavior, since that needs the actual
 TimescaleDB extension, which this environment couldn't pull.
 
-## What's next (architecture doc §9, steps 4–6)
+## What's next (architecture doc §9, steps 4 and 6)
 
 - **SMS/USSD ingestion** via Africa's Talking — same `EnergyReadingCreate`
   schema, new blueprint, `source_channel='sms'`.
-- **`report_snapshot` + Conservation Passport bridge** — publish immutable,
-  versioned snapshots (internal vs. external payload tiers per §6);
-  `superseded_by` is already in the schema for the correction trail.
 - **Solar-generation ingestion** once panels are actually contracted at
   either factory — wires into the existing `reading_type='solar_generation'`
   path, real-time via the existing MQTT/Socket.io pipeline per §7.
-- **Thermal-efficiency scenario** (fuelwood reduction) — deliberately not
-  implemented. The doc cites a 15–30% sector-wide range but no formula; see
-  the module docstring in `solgrid_tea/services/calculation_engine.py`.
+- **`superseded_by` correction flow** — the column and traceability exist
+  on `report_snapshot`, but nothing yet sets it; a correction today
+  requires a manual DB update rather than an endpoint that publishes a new
+  snapshot and links it back to the one it replaces.
+- **Scenario explainer** (`SolGrid-Tea-AI-Prompts.md` §3) — prompt and
+  tool contract written, not wired to any chat surface.
 - Frontend gaps: no facility-management beyond add (no edit/deactivate
-  UI), no report/passport view (backend doesn't have one yet either), no
+  UI), no extraction or report/passport UI (both are API-only — see **AI
+  features**), no thermal-efficiency fields in the scenario form, no
   role-management UI for inviting additional `app_user` accounts (there's
   no invite endpoint yet — new users currently need direct DB access or a
   future admin endpoint).

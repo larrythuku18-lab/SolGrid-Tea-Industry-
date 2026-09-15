@@ -135,3 +135,92 @@ def test_electrical_baseline_cannot_be_less_than_grid_baseline():
         ScenarioInput(
             **_base_kwargs(baseline_annual_grid_kwh=600_000.0, baseline_annual_electrical_kwh=500_000.0)
         )
+
+
+# --- thermal-efficiency add-on -------------------------------------------
+
+FUELWOOD_FACTOR_ID = uuid4()
+
+
+def _thermal_kwargs(**overrides):
+    kwargs = dict(
+        fuelwood_reduction_pct=20.0,
+        baseline_annual_fuelwood_m3=1000.0,
+        fuelwood_price_kes_per_m3=4000.0,
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["fuelwood_reduction_pct", "baseline_annual_fuelwood_m3", "fuelwood_price_kes_per_m3"],
+)
+def test_thermal_fields_must_be_given_together(missing_field):
+    thermal = _thermal_kwargs()
+    thermal[missing_field] = None
+    with pytest.raises(ValidationError):
+        ScenarioInput(**_base_kwargs(**thermal))
+
+
+def test_scenario_without_thermal_input_reports_zero_fuelwood_impact():
+    scenario_input = ScenarioInput(**_base_kwargs())
+    result = run_solar_scenario(
+        scenario_input,
+        grid_emission_factor_kg_per_kwh=0.11,
+        grid_emission_factor_id=FACTOR_ID,
+        grid_emission_factor_methodology_note="test factor",
+    )
+    assert result.fuelwood_reduction_m3 == 0.0
+    assert result.fuelwood_cost_savings_kes == 0.0
+    assert result.emissions_avoided_fuelwood_tco2 == 0.0
+    assert result.fuelwood_emission_factor_id is None
+    assert result.fuelwood_emission_factor_methodology_note is None
+
+
+def test_thermal_component_computes_deterministic_delta_from_stated_pct():
+    scenario_input = ScenarioInput(**_base_kwargs(**_thermal_kwargs(fuelwood_reduction_pct=20.0)))
+    result = run_solar_scenario(
+        scenario_input,
+        grid_emission_factor_kg_per_kwh=0.11,
+        grid_emission_factor_id=FACTOR_ID,
+        grid_emission_factor_methodology_note="test factor",
+        fuelwood_emission_factor_kg_per_m3=350.0,
+        fuelwood_emission_factor_id=FUELWOOD_FACTOR_ID,
+        fuelwood_emission_factor_methodology_note="fuelwood test factor",
+    )
+
+    # 1000 m3 baseline * 20% stated reduction
+    assert result.fuelwood_reduction_m3 == pytest.approx(200.0)
+    assert result.fuelwood_cost_savings_kes == pytest.approx(200.0 * 4000.0)
+    assert result.emissions_avoided_fuelwood_tco2 == pytest.approx(200.0 * 350.0 / 1000)
+    assert result.fuelwood_emission_factor_id == FUELWOOD_FACTOR_ID
+    assert result.fuelwood_emission_factor_methodology_note == "fuelwood test factor"
+
+
+def test_thermal_savings_are_not_folded_into_solar_payback():
+    # Same solar assumptions with and without a thermal component: payback
+    # (and annual_savings_kes, which drives it) must be identical, since
+    # capex only buys the solar installation — see ScenarioResult's comment.
+    solar_only = ScenarioInput(**_base_kwargs())
+    with_thermal = ScenarioInput(**_base_kwargs(**_thermal_kwargs()))
+
+    kwargs = dict(
+        grid_emission_factor_kg_per_kwh=0.11,
+        grid_emission_factor_id=FACTOR_ID,
+        grid_emission_factor_methodology_note="test factor",
+    )
+    result_solar_only = run_solar_scenario(solar_only, **kwargs)
+    result_with_thermal = run_solar_scenario(
+        with_thermal,
+        fuelwood_emission_factor_kg_per_m3=350.0,
+        fuelwood_emission_factor_id=FUELWOOD_FACTOR_ID,
+        fuelwood_emission_factor_methodology_note="fuelwood test factor",
+        **kwargs,
+    )
+
+    assert result_with_thermal.annual_savings_kes == pytest.approx(
+        result_solar_only.annual_savings_kes
+    )
+    assert result_with_thermal.payback_years == pytest.approx(result_solar_only.payback_years)
+    assert result_with_thermal.fuelwood_cost_savings_kes > 0

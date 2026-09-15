@@ -12,12 +12,17 @@ from sqlalchemy import select
 from solgrid_tea.errors import DomainError
 from solgrid_tea.extensions import db
 from solgrid_tea.models import EnergyReading, Facility, ProductionRecord
+from solgrid_tea.schemas.extraction import DOCUMENT_TYPES
 from solgrid_tea.schemas.ledger import EnergyReadingCreate, ProductionRecordCreate
 from solgrid_tea.security import tenant_scoped
+from solgrid_tea.services.extraction import extract_document_fields
 
 ledger_bp = Blueprint("ledger", __name__)
 
 WRITE_ROLES = ("admin", "operator")
+
+ALLOWED_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+MAX_EXTRACTION_IMAGE_BYTES = 10 * 1024 * 1024  # generous for a phone photo
 
 
 def _assert_facility_in_org(facility_id) -> None:
@@ -126,3 +131,34 @@ def list_production_records():
             for r in records
         ]
     )
+
+
+@ledger_bp.post("/extract")
+@tenant_scoped(roles=WRITE_ROLES)
+def extract_ledger_fields():
+    """Propose field values from a photographed document for a human to
+    review before submitting through the endpoints above. Writes nothing —
+    see solgrid_tea.services.extraction for the full contract."""
+    document_type = request.form.get("document_type")
+    if document_type not in DOCUMENT_TYPES:
+        raise DomainError(
+            f"document_type must be one of {', '.join(DOCUMENT_TYPES)}", status_code=422
+        )
+
+    image = request.files.get("image")
+    if image is None or image.filename == "":
+        raise DomainError("image file is required", status_code=422)
+    if image.mimetype not in ALLOWED_IMAGE_MIME_TYPES:
+        raise DomainError(
+            f"unsupported image type {image.mimetype!r} — use PNG, JPEG, WEBP, or GIF",
+            status_code=422,
+        )
+
+    image_bytes = image.read(MAX_EXTRACTION_IMAGE_BYTES + 1)
+    if not image_bytes:
+        raise DomainError("image file is empty", status_code=422)
+    if len(image_bytes) > MAX_EXTRACTION_IMAGE_BYTES:
+        raise DomainError("image exceeds the 10MB limit", status_code=422)
+
+    result = extract_document_fields(image_bytes, image.mimetype, document_type)
+    return jsonify(result.model_dump(mode="json"))

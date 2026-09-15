@@ -16,8 +16,9 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from solgrid_tea.models import EnergyContentFactor, EnergyReading, ProductionRecord
+from solgrid_tea.models import EnergyReading, ProductionRecord
 from solgrid_tea.schemas.benchmark import BenchmarkResult
+from solgrid_tea.services.reference_lookup import latest_energy_content_factor
 
 
 def compute_benchmark(
@@ -46,7 +47,7 @@ def compute_benchmark(
     missing_factor_types: set[str] = set()
 
     for reading in readings:
-        factor = _latest_energy_content_factor(session, reading.reading_type, reading.period_start)
+        factor = latest_energy_content_factor(session, reading.reading_type, reading.period_start)
         if factor is None:
             missing_factor_types.add(reading.reading_type)
             continue
@@ -72,17 +73,3 @@ def compute_benchmark(
         energy_mix_pct=energy_mix_pct,
         missing_energy_content_factors=sorted(missing_factor_types),
     )
-
-
-def _latest_energy_content_factor(
-    session: Session, fuel_type: str, as_of: date
-) -> EnergyContentFactor | None:
-    return session.scalars(
-        select(EnergyContentFactor)
-        .where(
-            EnergyContentFactor.fuel_type == fuel_type,
-            EnergyContentFactor.effective_from <= as_of,
-        )
-        .order_by(EnergyContentFactor.effective_from.desc())
-        .limit(1)
-    ).first()

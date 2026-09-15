@@ -5,13 +5,17 @@ model. Intermediate values (solar_annual_generation_kwh, addressable_kwh)
 are returned alongside the headline figures precisely so a report reader
 can retrace the calculation by hand.
 
-Only the pure-solar scenario is implemented. The architecture doc's §5
-mapping table also calls for a thermal-efficiency scenario (fuelwood
-reduction via better dryers, briquette blending, etc.), citing a
-sector-wide 15-30% range — but that range isn't concretized into a formula
-anywhere in the doc, and inventing one here would violate the same
-determinism/traceability principle this module exists to uphold. It's
-left unimplemented on purpose until that methodology is specified.
+The thermal-efficiency half (fuelwood reduction) is a stated operator
+target, not a system estimate. The architecture doc's §5 mapping table
+cites a sector-wide 15-30% range for what better dryers, briquette
+blending, etc. can achieve, but that range isn't concretized into a
+formula anywhere in the doc — there's no validated methodology for
+*predicting* a reduction from a practice change, and inventing one here
+would violate the same determinism/traceability principle this module
+exists to uphold. So the system doesn't predict a reduction; the operator
+states one they believe achievable (fuelwood_reduction_pct), and this
+module computes only the deterministic cost and emissions consequence of
+that stated figure — same treatment as every other input in this file.
 """
 
 from uuid import UUID
@@ -26,6 +30,9 @@ def run_solar_scenario(
     grid_emission_factor_kg_per_kwh: float,
     grid_emission_factor_id: UUID,
     grid_emission_factor_methodology_note: str,
+    fuelwood_emission_factor_kg_per_m3: float | None = None,
+    fuelwood_emission_factor_id: UUID | None = None,
+    fuelwood_emission_factor_methodology_note: str | None = None,
 ) -> ScenarioResult:
     solar_annual_generation_kwh = (
         scenario_input.target_solar_kw * scenario_input.solar_capacity_factor * HOURS_PER_YEAR
@@ -49,6 +56,11 @@ def run_solar_scenario(
 
     emissions_avoided_grid_tco2 = addressable_kwh * grid_emission_factor_kg_per_kwh / 1000
 
+    fuelwood_reduction_m3, fuelwood_cost_savings_kes, emissions_avoided_fuelwood_tco2 = (
+        _thermal_efficiency_outcome(scenario_input, fuelwood_emission_factor_kg_per_m3)
+    )
+    ran_thermal = scenario_input.fuelwood_reduction_pct is not None
+
     return ScenarioResult(
         solar_annual_generation_kwh=solar_annual_generation_kwh,
         addressable_kwh=addressable_kwh,
@@ -57,11 +69,41 @@ def run_solar_scenario(
         annual_savings_kes=annual_savings_kes,
         payback_years=payback_years,
         emissions_avoided_grid_tco2=emissions_avoided_grid_tco2,
-        emissions_avoided_fuelwood_tco2=0.0,
-        fuelwood_reduction_m3=0.0,
+        emissions_avoided_fuelwood_tco2=emissions_avoided_fuelwood_tco2,
+        fuelwood_reduction_m3=fuelwood_reduction_m3,
+        fuelwood_cost_savings_kes=fuelwood_cost_savings_kes,
         grid_emission_factor_id=grid_emission_factor_id,
         grid_emission_factor_methodology_note=grid_emission_factor_methodology_note,
+        fuelwood_emission_factor_id=fuelwood_emission_factor_id if ran_thermal else None,
+        fuelwood_emission_factor_methodology_note=(
+            fuelwood_emission_factor_methodology_note if ran_thermal else None
+        ),
     )
+
+
+def _thermal_efficiency_outcome(
+    scenario_input: ScenarioInput, fuelwood_emission_factor_kg_per_m3: float | None
+) -> tuple[float, float, float]:
+    if scenario_input.fuelwood_reduction_pct is None:
+        return 0.0, 0.0, 0.0
+
+    # Enforced together by ScenarioInput's validator.
+    assert scenario_input.baseline_annual_fuelwood_m3 is not None
+    assert scenario_input.fuelwood_price_kes_per_m3 is not None
+    # Enforced by the caller: it must look up a fuelwood emission factor and
+    # refuse the request if none is on file, the same way it already does
+    # for a missing grid_electricity factor — this function never silently
+    # reports zero avoided emissions for a thermal scenario that did run.
+    assert fuelwood_emission_factor_kg_per_m3 is not None
+
+    fuelwood_reduction_m3 = (
+        scenario_input.baseline_annual_fuelwood_m3 * scenario_input.fuelwood_reduction_pct / 100
+    )
+    fuelwood_cost_savings_kes = fuelwood_reduction_m3 * scenario_input.fuelwood_price_kes_per_m3
+    emissions_avoided_fuelwood_tco2 = (
+        fuelwood_reduction_m3 * fuelwood_emission_factor_kg_per_m3 / 1000
+    )
+    return fuelwood_reduction_m3, fuelwood_cost_savings_kes, emissions_avoided_fuelwood_tco2
 
 
 def _financing_outcome(

@@ -24,6 +24,12 @@ class Config:
     AT_API_KEY = os.environ.get("AT_API_KEY")
     AT_INBOUND_SHORTCODE = os.environ.get("AT_INBOUND_SHORTCODE")
 
+    # Extraction assist (SolGrid-Tea-AI-Prompts.md §1). Not read directly by
+    # app code — the anthropic SDK picks ANTHROPIC_API_KEY up from the
+    # environment on its own — kept here only so its absence is checkable
+    # the same way every other required setting is.
+    ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+
 
 class DevelopmentConfig(Config):
     DEBUG = True
