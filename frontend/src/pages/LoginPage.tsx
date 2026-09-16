@@ -4,6 +4,9 @@ import { useAuth } from "../auth/AuthContext";
 import { Banner } from "../components/Banner";
 import { ApiError } from "../api/client";
 
+const DEMO_EMAIL = import.meta.env.VITE_DEMO_EMAIL as string | undefined;
+const DEMO_PASSWORD = import.meta.env.VITE_DEMO_PASSWORD as string | undefined;
+
 export function LoginPage() {
   const { login, isAuthenticated, isLoading } = useAuth();
   const navigate = useNavigate();
@@ -18,6 +21,13 @@ export function LoginPage() {
     const state = location.state as { from?: { pathname?: string } } | null;
     const from = state?.from?.pathname ?? "/";
     return <Navigate to={from} replace />;
+  }
+
+  function fillDemoCredentials() {
+    if (!DEMO_EMAIL || !DEMO_PASSWORD) return;
+    setEmail(DEMO_EMAIL);
+    setPassword(DEMO_PASSWORD);
+    setError(null);
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -78,6 +88,15 @@ export function LoginPage() {
             {submitting ? "Signing in…" : "Sign in"}
           </button>
         </form>
+
+        {DEMO_EMAIL && DEMO_PASSWORD && (
+          <button type="button" className="demo-creds" onClick={fillDemoCredentials}>
+            <span className="demo-creds-label">Demo credentials</span>
+            <span className="mono">
+              {DEMO_EMAIL} · {DEMO_PASSWORD}
+            </span>
+          </button>
+        )}
       </div>
     </div>
   );
