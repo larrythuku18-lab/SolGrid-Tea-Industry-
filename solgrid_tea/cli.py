@@ -149,18 +149,22 @@ def register_cli(app):
     # real factories rather than the same numbers twice. Kenyan tea
     # production is seasonal — peak around Mar-May and Oct-Dec, lower
     # Jan-Feb and Jul-Aug — so month-to-month variation isn't just noise.
+    # Intensity factors calibrated so total energy cost / made_tea_kg lands
+    # around KES 21/kg (confirmed real figure) rather than the ~15 an
+    # earlier pass produced — scaled up ~1.4x from the original guess,
+    # keeping the same energy-mix shape (fuelwood-dominated).
     _DEMO_FACILITY_PROFILES = {
         "Kipchabo": {
-            "base_tea_kg": 450_000, "kwh_per_kg": 0.36,
-            "diesel_per_1000kg": 2.6, "fuelwood_m3_per_1000kg": 2.4,
+            "base_tea_kg": 450_000, "kwh_per_kg": 0.50,
+            "diesel_per_1000kg": 3.6, "fuelwood_m3_per_1000kg": 3.4,
         },
         "Gatitu": {
-            "base_tea_kg": 220_000, "kwh_per_kg": 0.34,
-            "diesel_per_1000kg": 2.2, "fuelwood_m3_per_1000kg": 2.3,
+            "base_tea_kg": 220_000, "kwh_per_kg": 0.48,
+            "diesel_per_1000kg": 3.1, "fuelwood_m3_per_1000kg": 3.2,
         },
         "_default": {
-            "base_tea_kg": 300_000, "kwh_per_kg": 0.35,
-            "diesel_per_1000kg": 2.4, "fuelwood_m3_per_1000kg": 2.35,
+            "base_tea_kg": 300_000, "kwh_per_kg": 0.49,
+            "diesel_per_1000kg": 3.4, "fuelwood_m3_per_1000kg": 3.3,
         },
     }
     _DEMO_SEASONAL_MULTIPLIER = {
@@ -177,12 +181,18 @@ def register_cli(app):
         every facility in an org, so dashboards show real trends instead of
         an empty shell.
 
+        Safe to re-run: replaces whatever energy_reading/production_record
+        rows already exist for the specific months it (re)generates, rather
+        than piling up duplicates, so recalibrating the profile numbers and
+        re-running just works.
+
         Dev/demo tool only — a real factory's history should come from
         actual ledger entries (or extraction assist / SMS ingestion once
-        built), never from this. Figures are directionally realistic for a
-        mid-size Kenyan KTDA-affiliated tea factory, not audited data.
-        Requires reference data effective before the earliest backfilled
-        month — see seed-reference-data --effective-from.
+        built), never from this; it will delete real entries for any month
+        it's pointed at. Figures are directionally realistic for a mid-size
+        Kenyan KTDA-affiliated tea factory, not audited data. Requires
+        reference data effective before the earliest backfilled month — see
+        seed-reference-data --effective-from.
         """
         rng = random.Random(rand_seed)
         org_id = uuid.UUID(str(org_id))
@@ -213,6 +223,20 @@ def register_cli(app):
             for year, month in periods:
                 period_start = date(year, month, 1)
                 period_end = date(year, month, calendar.monthrange(year, month)[1])
+                db.session.execute(
+                    text(
+                        "DELETE FROM energy_reading "
+                        "WHERE facility_id = :f AND period_start = :ps AND period_end = :pe"
+                    ),
+                    {"f": str(facility.id), "ps": period_start, "pe": period_end},
+                )
+                db.session.execute(
+                    text(
+                        "DELETE FROM production_record "
+                        "WHERE facility_id = :f AND period_start = :ps AND period_end = :pe"
+                    ),
+                    {"f": str(facility.id), "ps": period_start, "pe": period_end},
+                )
                 seasonal = _DEMO_SEASONAL_MULTIPLIER[month]
 
                 made_tea_kg = round(profile["base_tea_kg"] * seasonal * rng.uniform(0.90, 1.10))
