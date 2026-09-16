@@ -56,6 +56,14 @@ ingestion and solar-generation ingestion (steps 4 and 6) are not built yet
   `PLACEHOLDER`-flagged `emission_factor` or `energy_content_factor` row.
   The first two are overridable with a logged `override_reason`; the third
   is not.
+- **Report correction flow** (`POST /api/v1/reports` with `supersedes`):
+  republishing a snapshot for the same facility/period with a `supersedes`
+  field pointing at the old snapshot's id runs it through the same three
+  checks, then links the old snapshot to the new one via `superseded_by`
+  instead of overwriting it — the old figure and who published it stay on
+  record, `GET /api/v1/reports/<id>` on the old snapshot now shows
+  `superseded_by`. Rejects (422) a `supersedes` id for a different
+  facility/period, and (409) one that's already been superseded once.
 - **Frontend** (`frontend/`) — React + TypeScript console covering all of
   the above: Overview, Ledger, Benchmark, Scenarios. Built in the real
   Meridian design system (dark plum/amber, Bricolage Grotesque + Hanken
@@ -247,10 +255,6 @@ TimescaleDB extension, which this environment couldn't pull.
 - **Solar-generation ingestion** once panels are actually contracted at
   either factory — wires into the existing `reading_type='solar_generation'`
   path, real-time via the existing MQTT/Socket.io pipeline per §7.
-- **`superseded_by` correction flow** — the column and traceability exist
-  on `report_snapshot`, but nothing yet sets it; a correction today
-  requires a manual DB update rather than an endpoint that publishes a new
-  snapshot and links it back to the one it replaces.
 - **Scenario explainer** (`SolGrid-Tea-AI-Prompts.md` §3) — prompt and
   tool contract written, not wired to any chat surface.
 - Frontend gaps: no facility-management beyond add (no edit/deactivate

@@ -28,6 +28,31 @@ report_bp = Blueprint("report", __name__)
 WRITE_ROLES = ("admin", "operator")
 
 
+def _resolve_superseded_snapshot(payload_in: PublishReportRequest) -> ReportSnapshot | None:
+    """Look up and validate the snapshot a new publish is correcting, if any."""
+    if payload_in.supersedes is None:
+        return None
+
+    # RLS-scoped lookup, same as the facility check above the call site —
+    # a cross-tenant id simply won't be found.
+    snapshot = db.session.get(ReportSnapshot, payload_in.supersedes)
+    if snapshot is None:
+        raise DomainError("snapshot to supersede not found", status_code=404)
+    if snapshot.superseded_by is not None:
+        raise DomainError("that snapshot has already been superseded", status_code=409)
+    if (
+        snapshot.facility_id != payload_in.facility_id
+        or snapshot.period_start != payload_in.period_start
+        or snapshot.period_end != payload_in.period_end
+    ):
+        raise DomainError(
+            "supersedes must reference a snapshot for the same facility_id, "
+            "period_start, and period_end",
+            status_code=422,
+        )
+    return snapshot
+
+
 @report_bp.post("")
 @tenant_scoped(roles=WRITE_ROLES)
 def publish_report():
@@ -36,6 +61,8 @@ def publish_report():
     # facility carries RLS, so this also rejects a facility_id from another tenant.
     if db.session.get(Facility, payload_in.facility_id) is None:
         raise DomainError("facility not found", status_code=404)
+
+    superseded_snapshot = _resolve_superseded_snapshot(payload_in)
 
     completeness = check_completeness(
         db.session, payload_in.facility_id, payload_in.period_start, payload_in.period_end
@@ -90,6 +117,9 @@ def publish_report():
         methodology_version=REPORT_METHODOLOGY_VERSION,
     )
     db.session.add(snapshot)
+    if superseded_snapshot is not None:
+        db.session.flush()  # populate snapshot.id (server-side default)
+        superseded_snapshot.superseded_by = snapshot.id
     db.session.commit()
 
     return (
@@ -97,6 +127,7 @@ def publish_report():
             id=str(snapshot.id),
             published=True,
             methodology_version=snapshot.methodology_version,
+            supersedes=str(payload_in.supersedes) if payload_in.supersedes else None,
             **full_payload,
         ),
         201,

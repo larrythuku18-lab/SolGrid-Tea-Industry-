@@ -13,6 +13,12 @@ class PublishReportRequest(BaseModel):
     # enforced in the blueprint, not here, since that depends on check
     # results this schema doesn't have.
     override_reason: str | None = None
+    # Set to correct a previously published snapshot. Must reference a
+    # snapshot for this same facility_id/period_start/period_end that isn't
+    # already superseded — enforced in the blueprint (DB lookup, not
+    # available here). See architecture doc §6: the old snapshot stays in
+    # place, just marked as superseded, rather than being overwritten.
+    supersedes: UUID | None = None
 
     @model_validator(mode="after")
     def _check_period_order(self):
