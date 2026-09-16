@@ -102,6 +102,46 @@ export interface ScenarioResult {
   grid_emission_factor_methodology_note: string;
 }
 
+export type PanelStatus = "normal" | "underperforming" | "fault";
+export type BatteryStatus = "normal" | "degraded" | "fault";
+export type InsightSeverity = "info" | "warn" | "critical";
+
+export interface GenerationVsConsumptionPoint {
+  period_start: string;
+  period_end: string;
+  generation_kwh: number;
+  consumption_kwh: number;
+  self_consumption_pct: number | null;
+}
+
+export interface GenerationVsConsumptionSeries {
+  facility_id: string;
+  install_capacity_kw: number | null;
+  points: GenerationVsConsumptionPoint[];
+}
+
+export interface SolarHealthLatest {
+  ts: string;
+  battery_soc_pct: number | null;
+  battery_soh_pct: number | null;
+  panel_status: PanelStatus;
+  battery_status: BatteryStatus;
+  panel_temp_c: number | null;
+  note: string | null;
+}
+
+export interface SolarInsight {
+  severity: InsightSeverity;
+  message: string;
+}
+
+export interface SolarHealthSummary {
+  facility_id: string;
+  latest: SolarHealthLatest | null;
+  battery_soh_trend_pct: number | null;
+  insights: SolarInsight[];
+}
+
 export interface Me {
   user_id: string;
   org_id: string;

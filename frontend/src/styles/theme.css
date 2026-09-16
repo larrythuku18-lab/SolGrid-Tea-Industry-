@@ -631,6 +631,136 @@ tbody tr:hover {
   flex: 0 0 auto;
 }
 
+.swatch-line {
+  width: 14px;
+  height: 0;
+  border-top: 2.5px solid var(--volt);
+  flex: 0 0 auto;
+}
+
+/* ---------- generation vs. consumption chart ---------- */
+.chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.chart-gridline {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart-axis-label {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  fill: var(--ink-faint);
+}
+
+.chart-bar {
+  fill: var(--solar);
+  opacity: 0.85;
+}
+
+.chart-line {
+  stroke: var(--volt);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-dot {
+  fill: var(--panel);
+  stroke: var(--volt);
+  stroke-width: 2;
+}
+
+/* ---------- solar health ---------- */
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  padding: 18px;
+}
+
+.gauge {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gauge-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+
+.gauge-val {
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.gauge-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  overflow: hidden;
+}
+
+.gauge-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand);
+  transition: width 0.2s;
+}
+
+.gauge-fill.warn {
+  background: var(--solar);
+}
+
+.gauge-fill.alert {
+  background: var(--alert);
+}
+
+.insight-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+}
+
+.insight {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 13px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.insight-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex: 0 0 auto;
+  background: var(--brand);
+}
+
+.insight.warn .insight-dot {
+  background: var(--solar);
+}
+
+.insight.critical .insight-dot {
+  background: var(--alert);
+}
+
 /* ---------- login ---------- */
 .login-screen {
   min-height: 100vh;

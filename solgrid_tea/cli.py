@@ -1,7 +1,7 @@
 import calendar
 import random
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 
 import click
 from sqlalchemy import select, text
@@ -15,6 +15,7 @@ from solgrid_tea.models import (
     Facility,
     Organization,
     ProductionRecord,
+    SolarHealthReading,
 )
 
 
@@ -301,3 +302,156 @@ def register_cli(app):
 
         db.session.commit()
         click.echo(f"seeded {rows_inserted} ledger rows across {len(facilities)} facilit(y/ies)")
+
+    # Hypothetical install sizing + a monthly solar capacity-factor assumption
+    # used only to *generate* this synthetic demo data — a concrete number an
+    # operator would need to supply for a real site (see scenario engine's
+    # solar_capacity_factor field, "no safe platform default"). Not used
+    # anywhere in solar_insights.py's read path, which deliberately avoids
+    # assuming a capacity factor at query time.
+    _SOLAR_DEMO_PROFILES = {
+        "Kipchabo": {
+            "install_capacity_kw": 150, "capacity_factor": 0.205,
+            "start_soh_pct": 98.0, "soh_monthly_drop_pct": 0.5, "trouble": False,
+        },
+        "Gatitu": {
+            "install_capacity_kw": 80, "capacity_factor": 0.195,
+            "start_soh_pct": 98.0, "soh_monthly_drop_pct": 1.1, "trouble": True,
+        },
+        "_default": {
+            "install_capacity_kw": 60, "capacity_factor": 0.20,
+            "start_soh_pct": 97.0, "soh_monthly_drop_pct": 0.6, "trouble": False,
+        },
+    }
+    # Kenya's solar irradiance is fairly consistent year-round near the
+    # equator, but cloud cover during the long/short rains (Mar-May,
+    # Oct-Nov) knocks generation down a bit — a milder effect than the tea
+    # seasonality in _DEMO_SEASONAL_MULTIPLIER, and a different shape.
+    _SOLAR_SEASONAL_MULTIPLIER = {
+        1: 1.05, 2: 1.08, 3: 0.92, 4: 0.85, 5: 0.90, 6: 1.00,
+        7: 0.95, 8: 1.00, 9: 1.02, 10: 0.90, 11: 0.87, 12: 1.00,
+    }
+
+    @app.cli.command("seed-solar-demo")
+    @click.option("--org-id", "org_id", required=True, type=click.UUID)
+    @click.option("--months", default=8, show_default=True, help="Completed calendar months to backfill.")
+    @click.option("--seed", "rand_seed", default=None, type=int, help="Fix the RNG for reproducible output.")
+    def seed_solar_demo(org_id, months, rand_seed):
+        """Backfill solar_generation energy_reading rows and
+        solar_health_reading (panel/battery) rows for every facility in an
+        org, and set facility.install_capacity_kw if it isn't already set.
+
+        Presentation tool only — see migrations/0002's docstring. Neither
+        Kipchabo nor Gatitu has contracted panels yet; this data does not
+        represent anything installed in reality. Real generation should come
+        from ESP32 telemetry once that firmware and hardware exist. Safe to
+        re-run: replaces existing solar_generation/solar_health_reading rows
+        for the months it (re)generates.
+        """
+        rng = random.Random(rand_seed)
+        org_id = uuid.UUID(str(org_id))
+        db.session.execute(
+            text("SELECT set_config('app.org_id', :org_id, true)"), {"org_id": str(org_id)}
+        )
+        facilities = db.session.scalars(
+            select(Facility).where(Facility.organization_id == org_id)
+        ).all()
+        if not facilities:
+            click.echo(f"no facilities found for org {org_id}")
+            return
+
+        today = date.today()
+        periods = []
+        y, m = today.year, today.month
+        for _ in range(months):
+            m -= 1
+            if m == 0:
+                m, y = 12, y - 1
+            periods.append((y, m))
+        periods.reverse()  # oldest first, so SoH degrades forward in time
+
+        rows_inserted = 0
+        for facility in facilities:
+            profile = _SOLAR_DEMO_PROFILES.get(facility.name, _SOLAR_DEMO_PROFILES["_default"])
+            if facility.install_capacity_kw is None:
+                facility.install_capacity_kw = profile["install_capacity_kw"]
+
+            trouble_index = len(periods) - 1 if profile["trouble"] else None
+            soh = profile["start_soh_pct"]
+
+            for i, (year, month) in enumerate(periods):
+                period_start = date(year, month, 1)
+                period_end = date(year, month, calendar.monthrange(year, month)[1])
+
+                db.session.execute(
+                    text(
+                        "DELETE FROM energy_reading WHERE facility_id = :f "
+                        "AND period_start = :ps AND period_end = :pe "
+                        "AND reading_type = 'solar_generation'"
+                    ),
+                    {"f": str(facility.id), "ps": period_start, "pe": period_end},
+                )
+                db.session.execute(
+                    text(
+                        "DELETE FROM solar_health_reading WHERE facility_id = :f "
+                        "AND ts >= :ps AND ts <= :pe"
+                    ),
+                    {"f": str(facility.id), "ps": period_start, "pe": period_end},
+                )
+
+                days_in_month = (period_end - period_start).days + 1
+                seasonal = _SOLAR_SEASONAL_MULTIPLIER[month]
+                generation_kwh = round(
+                    profile["install_capacity_kw"]
+                    * profile["capacity_factor"]
+                    * 24
+                    * days_in_month
+                    * seasonal
+                    * rng.uniform(0.92, 1.08)
+                )
+
+                is_trouble_month = trouble_index is not None and i == trouble_index
+                panel_status = "normal"
+                battery_status = "normal"
+                if is_trouble_month:
+                    generation_kwh = round(generation_kwh * rng.uniform(0.55, 0.68))
+                    panel_status = "underperforming"
+
+                db.session.add(
+                    EnergyReading(
+                        facility_id=facility.id,
+                        reading_type="solar_generation",
+                        period_start=period_start,
+                        period_end=period_end,
+                        quantity=generation_kwh,
+                        unit="kWh",
+                        cost_kes=None,
+                        source_channel="manual",
+                    )
+                )
+
+                soh = max(0.0, soh - profile["soh_monthly_drop_pct"] * rng.uniform(0.7, 1.3))
+                soc = rng.uniform(30, 45) if is_trouble_month else rng.uniform(50, 82)
+                panel_temp_c = rng.uniform(34, 48)
+                reading_ts = datetime(year, month, period_end.day, 12, 0, tzinfo=timezone.utc)
+
+                db.session.add(
+                    SolarHealthReading(
+                        facility_id=facility.id,
+                        ts=reading_ts,
+                        battery_soc_pct=round(soc, 1),
+                        battery_soh_pct=round(soh, 1),
+                        panel_status=panel_status,
+                        battery_status=battery_status,
+                        panel_temp_c=round(panel_temp_c, 1),
+                        note="underperforming vs. trailing average" if is_trouble_month else None,
+                        source_channel="seed",
+                    )
+                )
+                rows_inserted += 2
+
+        db.session.commit()
+        click.echo(
+            f"seeded {rows_inserted} solar rows across {len(facilities)} facilit(y/ies) "
+            f"(install_capacity_kw set where it was null)"
+        )

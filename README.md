@@ -8,8 +8,10 @@ new `organization` row, not a rewrite.
 This build follows the architecture doc's own §9 sequencing: schema + RLS +
 Tier-4 web ingestion first, then the benchmark layer, then the scenario
 engine, then the report_snapshot/Conservation Passport bridge. SMS/USSD
-ingestion and solar-generation ingestion (steps 4 and 6) are not built yet
-— see **What's next** below.
+ingestion (step 4) is not built yet — see **What's next** below.
+Solar-generation monitoring (step 6) *is* built, ahead of the doc's own
+sequencing — see deviation #9 below for why, and **Solar monitoring
+(presentation data)** for what it actually is.
 
 ## What's built
 
@@ -64,28 +66,43 @@ ingestion and solar-generation ingestion (steps 4 and 6) are not built yet
   record, `GET /api/v1/reports/<id>` on the old snapshot now shows
   `superseded_by`. Rejects (422) a `supersedes` id for a different
   facility/period, and (409) one that's already been superseded once.
+- **Solar monitoring** (`GET /api/v1/solar/generation`, `GET
+  /api/v1/solar/health`; migration `0002_solar_monitoring.py`) —
+  generation-vs-consumption reconciliation (solar generation against
+  total electrical load: grid + diesel-kWh-equivalent + solar) and
+  panel/battery health (state of charge, state of health, fault status)
+  with plain-code, deterministic insights — no model, same "no invented
+  assumptions" discipline as the scenario engine: an underperformance
+  insight compares a site against its own trailing history rather than
+  an assumed capacity factor. **Presentation data, not real telemetry**
+  — see deviation #9. `flask seed-solar-demo --org-id <id>` backfills it;
+  safe to re-run.
 - **Frontend** (`frontend/`) — React + TypeScript console covering all of
-  the above: Overview, Ledger, Benchmark, Scenarios. Light theme with an
-  M-Pesa-inspired green sidebar/primary-action color and white cards
-  (Bricolage Grotesque + Hanken Grotesk + JetBrains Mono) — replaced the
-  earlier dark plum/amber "Meridian" look at the user's request; see
-  `frontend/README.md`.
+  the above: Overview, Ledger, Benchmark, Scenarios, Solar. Light theme
+  with an M-Pesa-inspired green sidebar/primary-action color and white
+  cards (Bricolage Grotesque + Hanken Grotesk + JetBrains Mono) — replaced
+  the earlier dark plum/amber "Meridian" look at the user's request; see
+  `frontend/README.md`. The Solar page's generation-vs-consumption chart
+  is a hand-rolled SVG component (`GenerationChart.tsx`), not a charting
+  library — consistent with the frontend's existing minimal-dependency
+  approach (no data-fetching library either; see `frontend/README.md`).
 - **Realistic demo history** (`flask seed-demo-history --org-id <id>`) —
   backfills several months of directionally-realistic energy_reading +
   production_record data for every facility in an org (seasonal
-  variation, not flat numbers), so Overview/Ledger/Benchmark/Scenarios
-  show real trends instead of an empty shell. Needs reference-data
-  validity backdated to cover the backfilled months — see
-  `seed-reference-data --effective-from`. Overview and Benchmark also now
-  default to each facility's latest period *on file* rather than the
-  current calendar month, which is empty for most of every month in
-  practice (bills arrive after period close). Dev/demo tooling only —
-  never point it at a real factory's data.
+  variation, not flat numbers), calibrated so total energy cost per kg
+  made tea lands around the real ~KES 21/kg figure, so
+  Overview/Ledger/Benchmark/Scenarios show real trends instead of an
+  empty shell. Needs reference-data validity backdated to cover the
+  backfilled months — see `seed-reference-data --effective-from`.
+  Overview and Benchmark also now default to each facility's latest
+  period *on file* rather than the current calendar month, which is
+  empty for most of every month in practice (bills arrive after period
+  close). Dev/demo tooling only — never point it at a real factory's data.
 - Unit tests for the calculation engine, ledger validation, extraction
   guardrails, and the plausibility check's skip logic (no infrastructure
-  needed); integration tests for RLS isolation, the benchmark engine, and
-  the report engine (need a live database, auto-skip otherwise); a
-  live-API extraction test against a synthetic image (needs
+  needed); integration tests for RLS isolation, the benchmark engine, the
+  report engine, and solar_insights (need a live database, auto-skip
+  otherwise); a live-API extraction test against a synthetic image (needs
   `ANTHROPIC_API_KEY` + credit balance, skips otherwise — see **AI
   features**).
 
@@ -148,6 +165,17 @@ and repeated here so it's not buried in code comments:
    alongside `emissions_avoided_grid_tco2`). A single TEXT column can't
    itemize multiple reference rows, so it was never going to serve both
    jobs.
+9. **Solar-generation monitoring was built before §9 step 6's own
+   precondition** ("only once panels are actually contracted at either
+   factory") **is met.** Neither Kipchabo nor Gatitu has contracted panels
+   — built anyway, at the user's explicit request, for a presentation.
+   Backed entirely by `flask seed-solar-demo` synthetic data (see below),
+   not real telemetry. `solar_health_reading` (migration 0002) is also new
+   relative to the doc — panel/battery diagnostic state (SoC, SoH, fault
+   status) doesn't fit `energy_reading`'s ledger-entry shape (a cost and a
+   matched period), so it's a separate table rather than overloading that
+   one. Real ESP32 firmware and hardware remain unbuilt; this only adds
+   the schema and read path so a real integration has somewhere to land.
 
 ## Local setup
 
@@ -162,6 +190,11 @@ alembic upgrade head
 flask --app wsgi.py seed-reference-data
 flask --app wsgi.py seed-org --org-name "NTZDC" --admin-email you@example.com \
     --admin-password 'change-me' --facility-name "Kipchabo"
+
+# Optional, for a populated demo instead of an empty one — see What's built:
+flask --app wsgi.py seed-reference-data --effective-from 2025-01-01
+flask --app wsgi.py seed-demo-history --org-id <organization_id> --months 8
+flask --app wsgi.py seed-solar-demo --org-id <organization_id> --months 8
 
 flask --app wsgi.py run
 ```
@@ -261,13 +294,17 @@ screenshotted, zero browser console errors. What's *not* verified here:
 real hypertable partitioning behavior, since that needs the actual
 TimescaleDB extension, which this environment couldn't pull.
 
-## What's next (architecture doc §9, steps 4 and 6)
+## What's next (architecture doc §9 step 4, plus gaps of its own)
 
 - **SMS/USSD ingestion** via Africa's Talking — same `EnergyReadingCreate`
   schema, new blueprint, `source_channel='sms'`.
-- **Solar-generation ingestion** once panels are actually contracted at
-  either factory — wires into the existing `reading_type='solar_generation'`
-  path, real-time via the existing MQTT/Socket.io pipeline per §7.
+- **Real ESP32 solar telemetry.** Solar monitoring itself is built (see
+  deviation #9 and **What's built**) but every reading behind it is
+  synthetic. Real hardware needs: ESP32 firmware pushing actual
+  `solar_generation` energy_reading rows and `solar_health_reading` rows
+  (`source_channel='esp32'` on both — the schema already has the slot),
+  and the real-time MQTT + Socket.io path §7 calls for once readings
+  arrive faster than the current period-based ledger cadence.
 - **Scenario explainer** (`SolGrid-Tea-AI-Prompts.md` §3) — prompt and
   tool contract written, not wired to any chat surface.
 - Frontend gaps: no facility-management beyond add (no edit/deactivate

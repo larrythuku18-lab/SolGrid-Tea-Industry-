@@ -13,3 +13,15 @@ export function currentMonthRange(): { start: string; end: string } {
   const start = new Date(now.getFullYear(), now.getMonth(), 1);
   return { start: toIsoDate(start), end: toIsoDate(now) };
 }
+
+export function monthsBeforeIso(isoDate: string, months: number): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const d = new Date(year, month - 1, day);
+  d.setMonth(d.getMonth() - months);
+  return toIsoDate(d);
+}
+
+export function formatMonthLabel(isoDate: string): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString("en-US", { month: "short" });
+}
