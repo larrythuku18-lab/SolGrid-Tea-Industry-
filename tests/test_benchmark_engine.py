@@ -80,12 +80,15 @@ def test_cost_per_kg_and_energy_mix(db_session, facility):
 
 
 def test_reading_type_without_factor_is_excluded_and_flagged(db_session, facility):
-    # No energy_content_factor rows seeded at all.
+    # solar_generation has no energy_content_factor seeded anywhere — unlike
+    # grid_electricity/diesel/fuelwood, which seed-reference-data always
+    # populates, so this holds regardless of what's already on file in
+    # whatever database these tests run against.
     db_session.execute(
         text(
             "INSERT INTO energy_reading "
             "(facility_id, reading_type, period_start, period_end, quantity, unit, source_channel) "
-            "VALUES (:f, 'fuelwood', '2026-01-01', '2026-01-31', 12, 'm3', 'manual')"
+            "VALUES (:f, 'solar_generation', '2026-01-01', '2026-01-31', 12, 'kWh', 'manual')"
         ),
         {"f": str(facility)},
     )
@@ -93,7 +96,7 @@ def test_reading_type_without_factor_is_excluded_and_flagged(db_session, facilit
     result = compute_benchmark(db_session, facility, date(2026, 1, 1), date(2026, 1, 31))
 
     assert result.total_energy_kwh == 0
-    assert result.missing_energy_content_factors == ["fuelwood"]
+    assert result.missing_energy_content_factors == ["solar_generation"]
 
 
 def test_reading_partially_outside_window_is_excluded(db_session, facility):

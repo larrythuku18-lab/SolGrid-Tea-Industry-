@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { getBenchmark } from "../api/benchmark";
 import { ApiError } from "../api/client";
+import { listProductionRecords } from "../api/ledger";
 import { runScenario } from "../api/scenario";
 import { Banner } from "../components/Banner";
 import { FacilitySelect } from "../components/FacilitySelect";
@@ -49,12 +51,64 @@ export function ScenarioPage() {
   const [result, setResult] = useState<ScenarioResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [baselineSuggestion, setBaselineSuggestion] = useState<string | null>(null);
 
   useEffect(() => {
     if (facilities.length > 0 && !form.facilityId) {
       setForm((f) => ({ ...f, facilityId: facilities[0].id }));
     }
   }, [facilities, form.facilityId]);
+
+  // Suggest baseline_annual_* from the facility's own ledger history instead
+  // of leaving a blank calculator — extrapolated from however much history
+  // is on file, not a real annual total, so it's always shown as a
+  // starting point to verify rather than filled in silently.
+  useEffect(() => {
+    if (!form.facilityId) return;
+    let cancelled = false;
+
+    // Reset first — otherwise switching facilities keeps the previous
+    // facility's suggested (or user-edited) numbers, since the "only fill
+    // if empty" logic below can't tell those apart from a fresh field.
+    setBaselineSuggestion(null);
+    setForm((f) => ({ ...f, baselineGridKwh: "", baselineElectricalKwh: "", baselineTotalKwh: "" }));
+
+    listProductionRecords({ facility_id: form.facilityId })
+      .then(async (records) => {
+        if (cancelled || records.length === 0) return;
+        const periodEnd = records[0].period_end;
+        const periodStart = records[records.length - 1].period_start;
+        const daysCovered =
+          (new Date(periodEnd).getTime() - new Date(periodStart).getTime()) / 86_400_000;
+        if (daysCovered < 45) return; // too little history to extrapolate responsibly
+
+        const benchmark = await getBenchmark({ facility_id: form.facilityId, period_start: periodStart, period_end: periodEnd });
+        if (cancelled || benchmark.total_energy_kwh <= 0) return;
+
+        const annualize = 365 / daysCovered;
+        const gridKwh = benchmark.total_energy_kwh * (benchmark.energy_mix_pct.grid_electricity ?? 0) / 100;
+        const dieselKwh = benchmark.total_energy_kwh * (benchmark.energy_mix_pct.diesel ?? 0) / 100;
+
+        setForm((f) => ({
+          ...f,
+          baselineGridKwh: f.baselineGridKwh || String(Math.round(gridKwh * annualize)),
+          baselineElectricalKwh: f.baselineElectricalKwh || String(Math.round((gridKwh + dieselKwh) * annualize)),
+          baselineTotalKwh: f.baselineTotalKwh || String(Math.round(benchmark.total_energy_kwh * annualize)),
+        }));
+        setBaselineSuggestion(
+          `Suggested from ${periodStart} to ${periodEnd} of ledger data` +
+            (annualize > 1.05 ? ", extrapolated to a full year" : "") +
+            ` — verify before relying on it.`
+        );
+      })
+      .catch(() => {
+        /* best-effort suggestion only — leave fields blank on failure */
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [form.facilityId]);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -197,6 +251,11 @@ export function ScenarioPage() {
                 <span className="field-hint">Electrical + thermal (fuelwood etc.)</span>
               </div>
             </div>
+            {baselineSuggestion && (
+              <div style={{ padding: "0 18px 18px" }}>
+                <Banner kind="warn">{baselineSuggestion}</Banner>
+              </div>
+            )}
             <div className="form-actions">
               <button type="submit" className="btn btn-primary" disabled={submitting}>
                 {submitting ? "Running…" : "Run scenario"}

@@ -5,7 +5,7 @@ import { Banner } from "../components/Banner";
 import { FacilitySelect } from "../components/FacilitySelect";
 import { PageHeader } from "../components/PageHeader";
 import { useFacilities } from "../hooks/useFacilities";
-import { currentMonthRange } from "../lib/dates";
+import { useLatestPeriod } from "../hooks/useLatestPeriod";
 import { READING_TYPE_COLOR, READING_TYPE_LABEL } from "../lib/readingTypes";
 import type { BenchmarkResult, EnergyReading } from "../types/api";
 import { ApiError } from "../api/client";
@@ -16,7 +16,7 @@ const numFormatter = new Intl.NumberFormat("en-KE", { maximumFractionDigits: 1 }
 export function OverviewPage() {
   const { facilities, isLoading: facilitiesLoading, error: facilitiesError } = useFacilities();
   const [facilityId, setFacilityId] = useState("");
-  const [{ start, end }] = useState(currentMonthRange());
+  const { period } = useLatestPeriod(facilityId);
 
   const [benchmark, setBenchmark] = useState<BenchmarkResult | null>(null);
   const [recentReadings, setRecentReadings] = useState<EnergyReading[]>([]);
@@ -30,13 +30,13 @@ export function OverviewPage() {
   }, [facilities, facilityId]);
 
   useEffect(() => {
-    if (!facilityId) return;
+    if (!facilityId || !period) return;
     let cancelled = false;
     setIsLoading(true);
     setError(null);
 
     Promise.all([
-      getBenchmark({ facility_id: facilityId, period_start: start, period_end: end }),
+      getBenchmark({ facility_id: facilityId, period_start: period.start, period_end: period.end }),
       listEnergyReadings({ facility_id: facilityId }),
     ])
       .then(([benchmarkResult, readings]) => {
@@ -55,7 +55,7 @@ export function OverviewPage() {
     return () => {
       cancelled = true;
     };
-  }, [facilityId, start, end]);
+  }, [facilityId, period]);
 
   const mixEntries = benchmark ? Object.entries(benchmark.energy_mix_pct) : [];
 
@@ -65,8 +65,13 @@ export function OverviewPage() {
         title="Overview"
         meta={
           <>
-            {facilities.length} facilit{facilities.length === 1 ? "y" : "ies"} ·{" "}
-            <b>{start}</b> to <b>{end}</b>
+            {facilities.length} facilit{facilities.length === 1 ? "y" : "ies"}
+            {period && (
+              <>
+                {" "}
+                · latest period on file <b>{period.start}</b> to <b>{period.end}</b>
+              </>
+            )}
           </>
         }
         right={
@@ -93,7 +98,7 @@ export function OverviewPage() {
               <div className="tile-num mono">
                 {numFormatter.format(benchmark.total_made_tea_kg)} <small>kg</small>
               </div>
-              <div className="tile-foot">this calendar month</div>
+              <div className="tile-foot">latest period on file</div>
             </div>
             <div className="tile">
               <div className="tile-label">Energy cost</div>

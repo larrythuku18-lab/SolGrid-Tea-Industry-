@@ -5,7 +5,7 @@ import { Banner } from "../components/Banner";
 import { FacilitySelect } from "../components/FacilitySelect";
 import { PageHeader } from "../components/PageHeader";
 import { useFacilities } from "../hooks/useFacilities";
-import { currentMonthRange } from "../lib/dates";
+import { useLatestPeriod } from "../hooks/useLatestPeriod";
 import { READING_TYPE_COLOR, READING_TYPE_LABEL } from "../lib/readingTypes";
 import type { BenchmarkResult } from "../types/api";
 
@@ -14,11 +14,11 @@ const kesFormatter = new Intl.NumberFormat("en-KE", { maximumFractionDigits: 0 }
 
 export function BenchmarkPage() {
   const { facilities, isLoading: facilitiesLoading, error: facilitiesError } = useFacilities();
-  const defaultRange = currentMonthRange();
 
   const [facilityId, setFacilityId] = useState("");
-  const [periodStart, setPeriodStart] = useState(defaultRange.start);
-  const [periodEnd, setPeriodEnd] = useState(defaultRange.end);
+  const { period } = useLatestPeriod(facilityId);
+  const [periodStart, setPeriodStart] = useState("");
+  const [periodEnd, setPeriodEnd] = useState("");
   const [result, setResult] = useState<BenchmarkResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -27,12 +27,22 @@ export function BenchmarkPage() {
     if (facilities.length > 0 && !facilityId) setFacilityId(facilities[0].id);
   }, [facilities, facilityId]);
 
-  async function runBenchmark(event: FormEvent) {
-    event.preventDefault();
+  // Defaults the query to the facility's latest period on file rather than
+  // the current calendar month, which is sparse for most of every month —
+  // see useLatestPeriod. Only applies on facility switch, so it won't
+  // clobber dates the user is mid-edit on.
+  useEffect(() => {
+    if (period) {
+      setPeriodStart(period.start);
+      setPeriodEnd(period.end);
+    }
+  }, [period]);
+
+  async function runBenchmarkFor(facility: string, start: string, end: string) {
     setError(null);
     setIsLoading(true);
     try {
-      const data = await getBenchmark({ facility_id: facilityId, period_start: periodStart, period_end: periodEnd });
+      const data = await getBenchmark({ facility_id: facility, period_start: start, period_end: end });
       setResult(data);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to compute benchmark.");
@@ -41,6 +51,19 @@ export function BenchmarkPage() {
       setIsLoading(false);
     }
   }
+
+  function runBenchmark(event: FormEvent) {
+    event.preventDefault();
+    void runBenchmarkFor(facilityId, periodStart, periodEnd);
+  }
+
+  // Run automatically once a facility's default period resolves, so the
+  // page shows real numbers on first load instead of an empty query form.
+  useEffect(() => {
+    if (facilityId && period) {
+      void runBenchmarkFor(facilityId, period.start, period.end);
+    }
+  }, [facilityId, period]);
 
   const mixEntries = result ? Object.entries(result.energy_mix_pct) : [];
 

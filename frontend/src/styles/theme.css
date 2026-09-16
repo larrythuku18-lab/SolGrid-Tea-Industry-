@@ -1,22 +1,35 @@
-/* Meridian design tokens — ported verbatim from the Lagriff console
-   reference (~/Downloads/lagriff-console.html) so this module shares the
-   rest of SolGrid's visual language rather than inventing a new one. */
+/* M-Pesa-inspired light theme: white/pale-green canvas, Safaricom-green
+   sidebar and primary actions, amber reserved for solar-specific data so
+   it doesn't compete with the brand green. Replaces the earlier dark
+   plum/amber "Meridian" theme at the user's request. */
 :root {
-  --bg: #14101f;
-  --bg-grad: #190f24;
-  --panel: #1c1629;
-  --panel-2: #221a33;
-  --line: rgba(244, 239, 233, 0.08);
-  --line-2: rgba(244, 239, 233, 0.16);
-  --ink: #f3ede4;
-  --ink-dim: #b6abc4;
-  --ink-faint: #766b88;
-  --solar: #fdb44b;
-  --solar-hi: #ffd27a;
-  --volt: #37d9c5;
-  --alert: #ff6552;
+  --bg: #f2f6f3;
+  --bg-grad: #e9f3ec;
+  --panel: #ffffff;
+  --panel-2: #f6f9f7;
+  --line: rgba(11, 40, 25, 0.1);
+  --line-2: rgba(11, 40, 25, 0.18);
+  --ink: #142a1c;
+  --ink-dim: #56695d;
+  --ink-faint: #8b9c91;
+  --solar: #ea9a2e;
+  --solar-hi: #ffb74d;
+  --volt: #2f6fe0;
+  --alert: #d64545;
+  --brand: #059450;
+  --brand-hi: #14b368;
+  --brand-dark: #033a20;
+  --brand-tint: #e5f6ec;
   --r: 16px;
   --r-sm: 10px;
+  --shadow: 0 1px 2px rgba(11, 40, 25, 0.04), 0 10px 28px rgba(11, 40, 25, 0.06);
+
+  /* Sidebar reads on a dark green background, not the light canvas above. */
+  --rail-ink: #ffffff;
+  --rail-ink-dim: rgba(255, 255, 255, 0.72);
+  --rail-ink-faint: rgba(255, 255, 255, 0.48);
+  --rail-line: rgba(255, 255, 255, 0.14);
+  --rail-active-bg: rgba(255, 255, 255, 0.16);
 }
 
 * {
@@ -44,8 +57,8 @@ body {
 }
 
 ::selection {
-  background: rgba(253, 180, 75, 0.28);
-  color: #fff;
+  background: rgba(5, 148, 80, 0.2);
+  color: #0a2415;
 }
 
 a {
@@ -72,8 +85,8 @@ button {
 }
 
 .rail {
-  border-right: 1px solid var(--line);
-  background: linear-gradient(180deg, var(--bg-grad), var(--bg));
+  color: var(--rail-ink);
+  background: linear-gradient(165deg, var(--brand-dark) 0%, var(--brand) 100%);
   display: flex;
   flex-direction: column;
   padding: 22px 18px;
@@ -89,19 +102,26 @@ button {
   padding: 4px 6px 26px;
 }
 
+.brand-mark {
+  display: block;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+
 .brand-name {
   font-family: "Bricolage Grotesque", sans-serif;
   font-weight: 800;
   font-size: 19px;
   letter-spacing: -0.02em;
   line-height: 1;
+  color: var(--rail-ink);
 }
 
 .brand-sub {
   font-size: 10.5px;
   letter-spacing: 0.13em;
   text-transform: uppercase;
-  color: var(--ink-faint);
+  color: var(--rail-ink-faint);
   margin-top: 3px;
 }
 
@@ -118,7 +138,7 @@ button {
   gap: 11px;
   padding: 9px 12px;
   border-radius: var(--r-sm);
-  color: var(--ink-dim);
+  color: var(--rail-ink-dim);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
@@ -131,12 +151,12 @@ button {
 }
 
 .nav a:hover {
-  background: rgba(244, 239, 233, 0.04);
-  color: var(--ink);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--rail-ink);
 }
 
 .nav a.active {
-  background: rgba(253, 180, 75, 0.1);
+  background: var(--rail-active-bg);
   color: var(--solar-hi);
 }
 
@@ -145,14 +165,14 @@ button {
 }
 
 .nav a:focus-visible {
-  outline: 2px solid var(--solar);
+  outline: 2px solid var(--solar-hi);
   outline-offset: 1px;
 }
 
 .rail-foot {
   margin-top: auto;
   padding-top: 16px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--rail-line);
 }
 
 .acct {
@@ -167,8 +187,8 @@ button {
   height: 34px;
   border-radius: 9px;
   flex: 0 0 auto;
-  background: linear-gradient(140deg, #2a2140, #1a1428);
-  border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--rail-line);
   display: grid;
   place-items: center;
   font-weight: 700;
@@ -180,11 +200,12 @@ button {
   font-size: 13px;
   font-weight: 600;
   line-height: 1.2;
+  color: var(--rail-ink);
 }
 
 .acct-role {
   font-size: 11px;
-  color: var(--ink-faint);
+  color: var(--rail-ink-faint);
   text-transform: capitalize;
 }
 
@@ -192,8 +213,8 @@ button {
   margin-top: 10px;
   width: 100%;
   background: transparent;
-  border: 1px solid var(--line-2);
-  color: var(--ink-dim);
+  border: 1px solid var(--rail-line);
+  color: var(--rail-ink-dim);
   border-radius: var(--r-sm);
   padding: 8px 10px;
   font-size: 12.5px;
@@ -202,8 +223,8 @@ button {
 }
 
 .logout-btn:hover {
-  background: rgba(255, 101, 82, 0.1);
-  color: var(--alert);
+  background: rgba(214, 69, 69, 0.18);
+  color: #ffd7d2;
 }
 
 .main {
@@ -247,23 +268,23 @@ button {
   gap: 7px;
   padding: 7px 13px;
   border-radius: 999px;
-  border: 1px solid rgba(55, 217, 197, 0.3);
-  background: rgba(55, 217, 197, 0.08);
+  border: 1px solid rgba(5, 148, 80, 0.25);
+  background: var(--brand-tint);
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--volt);
+  color: var(--brand-dark);
 }
 
 .pill.warn {
-  border-color: rgba(253, 180, 75, 0.3);
-  background: rgba(253, 180, 75, 0.08);
-  color: var(--solar);
+  border-color: rgba(234, 154, 46, 0.35);
+  background: rgba(234, 154, 46, 0.12);
+  color: #6e460c;
 }
 
 .pill.alert {
-  border-color: rgba(255, 101, 82, 0.3);
-  background: rgba(255, 101, 82, 0.08);
-  color: var(--alert);
+  border-color: rgba(214, 69, 69, 0.3);
+  background: rgba(214, 69, 69, 0.1);
+  color: #822013;
 }
 
 .dot {
@@ -284,6 +305,7 @@ button {
   border: 1px solid var(--line);
   border-radius: var(--r);
   background: var(--panel);
+  box-shadow: var(--shadow);
   padding: 18px 18px 16px;
   position: relative;
   overflow: hidden;
@@ -322,6 +344,7 @@ button {
   border: 1px solid var(--line);
   border-radius: var(--r);
   background: var(--panel);
+  box-shadow: var(--shadow);
   margin-bottom: 18px;
 }
 
@@ -354,7 +377,7 @@ button {
 }
 
 .panel-note b {
-  color: var(--volt);
+  color: var(--brand);
   font-weight: 600;
 }
 
@@ -406,9 +429,9 @@ input::placeholder {
 
 input:focus,
 select:focus {
-  outline: 2px solid var(--solar);
+  outline: 2px solid var(--brand);
   outline-offset: 1px;
-  border-color: var(--solar);
+  border-color: var(--brand);
 }
 
 .form-actions {
@@ -443,12 +466,12 @@ select:focus {
 }
 
 .btn-primary {
-  background: var(--solar);
-  color: #1a1020;
+  background: var(--brand);
+  color: #ffffff;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--solar-hi);
+  background: var(--brand-hi);
 }
 
 .btn-secondary {
@@ -458,7 +481,7 @@ select:focus {
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: rgba(244, 239, 233, 0.04);
+  background: rgba(11, 40, 25, 0.04);
 }
 
 /* ---------- tables ---------- */
@@ -496,14 +519,14 @@ tbody tr:last-child td {
 }
 
 tbody tr:hover {
-  background: rgba(244, 239, 233, 0.02);
+  background: var(--brand-tint);
 }
 
 .tag {
   font-family: "JetBrains Mono", monospace;
   font-size: 11px;
   color: var(--ink-dim);
-  background: rgba(244, 239, 233, 0.05);
+  background: rgba(11, 40, 25, 0.06);
   padding: 2px 7px;
   border-radius: 6px;
 }
@@ -525,21 +548,21 @@ tbody tr:hover {
 }
 
 .banner-error {
-  background: rgba(255, 101, 82, 0.1);
-  border-color: rgba(255, 101, 82, 0.3);
-  color: #ffb4a8;
+  background: rgba(214, 69, 69, 0.1);
+  border-color: rgba(214, 69, 69, 0.28);
+  color: #822013;
 }
 
 .banner-success {
-  background: rgba(55, 217, 197, 0.1);
-  border-color: rgba(55, 217, 197, 0.3);
-  color: var(--volt);
+  background: var(--brand-tint);
+  border-color: rgba(5, 148, 80, 0.3);
+  color: var(--brand-dark);
 }
 
 .banner-warn {
-  background: rgba(253, 180, 75, 0.1);
-  border-color: rgba(253, 180, 75, 0.3);
-  color: var(--solar);
+  background: rgba(234, 154, 46, 0.12);
+  border-color: rgba(234, 154, 46, 0.32);
+  color: #6e460c;
 }
 
 /* ---------- results / metric rows ---------- */
@@ -613,9 +636,7 @@ tbody tr:hover {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  background:
-    radial-gradient(120% 80% at 50% -10%, rgba(253, 180, 75, 0.1), transparent 60%),
-    linear-gradient(180deg, var(--bg-grad), var(--bg));
+  background: linear-gradient(165deg, var(--brand-dark) 0%, var(--brand) 46%, #f2f6f3 46%);
   padding: 20px;
 }
 
@@ -625,6 +646,7 @@ tbody tr:hover {
   border: 1px solid var(--line);
   border-radius: var(--r);
   background: var(--panel);
+  box-shadow: 0 1px 2px rgba(11, 40, 25, 0.05), 0 24px 48px rgba(11, 40, 25, 0.16);
   padding: 30px 28px;
 }
 
@@ -692,7 +714,7 @@ tbody tr:hover {
     gap: 18px;
     padding: 14px 18px;
     border-right: none;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--rail-line);
     flex-wrap: wrap;
   }
   .nav {
@@ -708,6 +730,9 @@ tbody tr:hover {
   }
   .tiles {
     grid-template-columns: 1fr;
+  }
+  .login-screen {
+    background: linear-gradient(180deg, var(--brand-dark) 0%, var(--brand) 30%, #f2f6f3 30%);
   }
 }
 

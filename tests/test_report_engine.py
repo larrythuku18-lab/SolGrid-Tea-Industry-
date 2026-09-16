@@ -54,14 +54,16 @@ def _seed_factors(session, emission_note="test factor", energy_note="test factor
     )
 
 
-def _seed_reading_and_production(session, facility_id, cost_kes=150000, made_tea_kg=5000):
+def _seed_reading_and_production(
+    session, facility_id, cost_kes=150000, made_tea_kg=5000, reading_type="grid_electricity"
+):
     session.execute(
         text(
             "INSERT INTO energy_reading "
             "(facility_id, reading_type, period_start, period_end, quantity, unit, cost_kes, source_channel) "
-            "VALUES (:f, 'grid_electricity', '2026-01-01', '2026-01-31', 10000, 'kWh', :cost, 'manual')"
+            "VALUES (:f, :reading_type, '2026-01-01', '2026-01-31', 10000, 'kWh', :cost, 'manual')"
         ),
-        {"f": str(facility_id), "cost": cost_kes},
+        {"f": str(facility_id), "cost": cost_kes, "reading_type": reading_type},
     )
     session.execute(
         text(
@@ -90,14 +92,18 @@ def test_completeness_passes_with_production_and_energy_data(db_session, facilit
 def test_completeness_flags_missing_energy_content_factor(db_session, facility):
     # emission_factor seeded, but NOT energy_content_factor — the benchmark
     # excludes the reading from total_energy_kwh and flags it as missing.
+    # solar_generation is used because it's the one reading_type
+    # seed-reference-data never populates a factor for, so this holds
+    # regardless of what's already on file in whatever database these
+    # tests run against.
     db_session.execute(
         text(
             "INSERT INTO emission_factor "
             "(fuel_type, kg_co2_per_unit, unit, effective_from, methodology_note) VALUES "
-            "('grid_electricity', 0.11, 'kWh', '2026-01-01', 'test factor')"
+            "('solar_generation', 0.0, 'kWh', '2026-01-01', 'test factor')"
         )
     )
-    _seed_reading_and_production(db_session, facility)
+    _seed_reading_and_production(db_session, facility, reading_type="solar_generation")
 
     result = check_completeness(db_session, facility, date(2026, 1, 1), date(2026, 1, 31))
     assert result.passed is False

@@ -65,9 +65,22 @@ ingestion and solar-generation ingestion (steps 4 and 6) are not built yet
   `superseded_by`. Rejects (422) a `supersedes` id for a different
   facility/period, and (409) one that's already been superseded once.
 - **Frontend** (`frontend/`) — React + TypeScript console covering all of
-  the above: Overview, Ledger, Benchmark, Scenarios. Built in the real
-  Meridian design system (dark plum/amber, Bricolage Grotesque + Hanken
-  Grotesk + JetBrains Mono), not a new look — see `frontend/README.md`.
+  the above: Overview, Ledger, Benchmark, Scenarios. Light theme with an
+  M-Pesa-inspired green sidebar/primary-action color and white cards
+  (Bricolage Grotesque + Hanken Grotesk + JetBrains Mono) — replaced the
+  earlier dark plum/amber "Meridian" look at the user's request; see
+  `frontend/README.md`.
+- **Realistic demo history** (`flask seed-demo-history --org-id <id>`) —
+  backfills several months of directionally-realistic energy_reading +
+  production_record data for every facility in an org (seasonal
+  variation, not flat numbers), so Overview/Ledger/Benchmark/Scenarios
+  show real trends instead of an empty shell. Needs reference-data
+  validity backdated to cover the backfilled months — see
+  `seed-reference-data --effective-from`. Overview and Benchmark also now
+  default to each facility's latest period *on file* rather than the
+  current calendar month, which is empty for most of every month in
+  practice (bills arrive after period close). Dev/demo tooling only —
+  never point it at a real factory's data.
 - Unit tests for the calculation engine, ledger validation, extraction
   guardrails, and the plausibility check's skip logic (no infrastructure
   needed); integration tests for RLS isolation, the benchmark engine, and

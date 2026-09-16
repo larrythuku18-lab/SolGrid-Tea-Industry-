@@ -42,19 +42,7 @@ export function LoginPage() {
     <div className="login-screen">
       <div className="login-card">
         <div className="login-brand">
-          <svg width="30" height="30" viewBox="0 0 30 30" fill="none" aria-hidden="true">
-            <circle cx="15" cy="15" r="6.2" fill="#FDB44B" />
-            <g stroke="#FDB44B" strokeWidth="1.8" strokeLinecap="round">
-              <line x1="15" y1="2.5" x2="15" y2="6" />
-              <line x1="15" y1="24" x2="15" y2="27.5" />
-              <line x1="2.5" y1="15" x2="6" y2="15" />
-              <line x1="24" y1="15" x2="27.5" y2="15" />
-              <line x1="6.2" y1="6.2" x2="8.6" y2="8.6" />
-              <line x1="21.4" y1="21.4" x2="23.8" y2="23.8" />
-              <line x1="23.8" y1="6.2" x2="21.4" y2="8.6" />
-              <line x1="8.6" y1="21.4" x2="6.2" y2="23.8" />
-            </g>
-          </svg>
+          <img className="brand-mark" src="/apple-touch-icon.png" alt="" width={34} height={34} />
           <div>
             <div className="login-title">SOLGRID</div>
             <div className="login-sub">Tea Energy Intelligence</div>

@@ -1,11 +1,21 @@
+import calendar
+import random
 import uuid
 from datetime import date
 
 import click
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from solgrid_tea.extensions import db
-from solgrid_tea.models import AppUser, EmissionFactor, EnergyContentFactor, Facility, Organization
+from solgrid_tea.models import (
+    AppUser,
+    EmissionFactor,
+    EnergyContentFactor,
+    EnergyReading,
+    Facility,
+    Organization,
+    ProductionRecord,
+)
 
 
 def register_cli(app):
@@ -51,7 +61,20 @@ def register_cli(app):
         click.echo(f"organization_id={org_id} facility_id={facility_id} admin_user_id={admin_id}")
 
     @app.cli.command("seed-reference-data")
-    def seed_reference_data():
+    @click.option(
+        "--effective-from",
+        "effective_from",
+        default=None,
+        help=(
+            "Date these factors are valid from (YYYY-MM-DD). Defaults to today. "
+            "Pass an earlier date to backfill validity for historical ledger "
+            "data — latest_emission_factor()/latest_energy_content_factor() "
+            "pick the newest row with effective_from <= the period in "
+            "question, so an earlier row here doesn't touch or weaken "
+            "whatever's already on file for later dates."
+        ),
+    )
+    def seed_reference_data(effective_from):
         """Seed emission_factor / energy_content_factor with starting values.
 
         These are global reference tables (no RLS, no tenant), but they are
@@ -63,7 +86,7 @@ def register_cli(app):
         or auditor citing a PLACEHOLDER row; replace it with a sourced
         figure first.
         """
-        today = date.today()
+        today = date.fromisoformat(effective_from) if effective_from else date.today()
 
         db.session.add_all(
             [
@@ -121,3 +144,136 @@ def register_cli(app):
         )
         db.session.commit()
         click.echo("reference data seeded — grid_electricity emission factor is a PLACEHOLDER")
+
+    # Rough per-facility sizing so demo history looks like two different
+    # real factories rather than the same numbers twice. Kenyan tea
+    # production is seasonal — peak around Mar-May and Oct-Dec, lower
+    # Jan-Feb and Jul-Aug — so month-to-month variation isn't just noise.
+    _DEMO_FACILITY_PROFILES = {
+        "Kipchabo": {
+            "base_tea_kg": 450_000, "kwh_per_kg": 0.36,
+            "diesel_per_1000kg": 2.6, "fuelwood_m3_per_1000kg": 2.4,
+        },
+        "Gatitu": {
+            "base_tea_kg": 220_000, "kwh_per_kg": 0.34,
+            "diesel_per_1000kg": 2.2, "fuelwood_m3_per_1000kg": 2.3,
+        },
+        "_default": {
+            "base_tea_kg": 300_000, "kwh_per_kg": 0.35,
+            "diesel_per_1000kg": 2.4, "fuelwood_m3_per_1000kg": 2.35,
+        },
+    }
+    _DEMO_SEASONAL_MULTIPLIER = {
+        1: 0.88, 2: 0.85, 3: 1.05, 4: 1.15, 5: 1.12, 6: 1.00,
+        7: 0.92, 8: 0.90, 9: 0.95, 10: 1.08, 11: 1.10, 12: 1.02,
+    }
+
+    @app.cli.command("seed-demo-history")
+    @click.option("--org-id", "org_id", required=True, type=click.UUID)
+    @click.option("--months", default=8, show_default=True, help="Completed calendar months to backfill.")
+    @click.option("--seed", "rand_seed", default=None, type=int, help="Fix the RNG for reproducible output.")
+    def seed_demo_history(org_id, months, rand_seed):
+        """Backfill realistic energy_reading + production_record history for
+        every facility in an org, so dashboards show real trends instead of
+        an empty shell.
+
+        Dev/demo tool only — a real factory's history should come from
+        actual ledger entries (or extraction assist / SMS ingestion once
+        built), never from this. Figures are directionally realistic for a
+        mid-size Kenyan KTDA-affiliated tea factory, not audited data.
+        Requires reference data effective before the earliest backfilled
+        month — see seed-reference-data --effective-from.
+        """
+        rng = random.Random(rand_seed)
+        org_id = uuid.UUID(str(org_id))
+        db.session.execute(
+            text("SELECT set_config('app.org_id', :org_id, true)"), {"org_id": str(org_id)}
+        )
+        facilities = db.session.scalars(
+            select(Facility).where(Facility.organization_id == org_id)
+        ).all()
+        if not facilities:
+            click.echo(f"no facilities found for org {org_id}")
+            return
+
+        today = date.today()
+        # Completed calendar months only, most recent first: (year, month)
+        # for the month before the current one, going back `months` steps.
+        periods = []
+        y, m = today.year, today.month
+        for _ in range(months):
+            m -= 1
+            if m == 0:
+                m, y = 12, y - 1
+            periods.append((y, m))
+
+        rows_inserted = 0
+        for facility in facilities:
+            profile = _DEMO_FACILITY_PROFILES.get(facility.name, _DEMO_FACILITY_PROFILES["_default"])
+            for year, month in periods:
+                period_start = date(year, month, 1)
+                period_end = date(year, month, calendar.monthrange(year, month)[1])
+                seasonal = _DEMO_SEASONAL_MULTIPLIER[month]
+
+                made_tea_kg = round(profile["base_tea_kg"] * seasonal * rng.uniform(0.90, 1.10))
+                grid_kwh = round(made_tea_kg * profile["kwh_per_kg"] * rng.uniform(0.95, 1.05))
+                diesel_litres = round(
+                    (made_tea_kg / 1000) * profile["diesel_per_1000kg"] * rng.uniform(0.70, 1.40)
+                )
+                fuelwood_m3 = round(
+                    (made_tea_kg / 1000) * profile["fuelwood_m3_per_1000kg"] * rng.uniform(0.92, 1.08)
+                )
+
+                grid_tariff_kes = rng.uniform(14.3, 15.6)
+                diesel_price_kes = rng.uniform(178, 196)
+                fuelwood_price_kes = rng.uniform(3800, 4300)
+
+                db.session.add(
+                    ProductionRecord(
+                        facility_id=facility.id,
+                        period_start=period_start,
+                        period_end=period_end,
+                        made_tea_kg=made_tea_kg,
+                        source="manual",
+                    )
+                )
+                db.session.add(
+                    EnergyReading(
+                        facility_id=facility.id,
+                        reading_type="grid_electricity",
+                        period_start=period_start,
+                        period_end=period_end,
+                        quantity=grid_kwh,
+                        unit="kWh",
+                        cost_kes=round(grid_kwh * grid_tariff_kes),
+                        source_channel="manual",
+                    )
+                )
+                db.session.add(
+                    EnergyReading(
+                        facility_id=facility.id,
+                        reading_type="diesel",
+                        period_start=period_start,
+                        period_end=period_end,
+                        quantity=diesel_litres,
+                        unit="litre",
+                        cost_kes=round(diesel_litres * diesel_price_kes),
+                        source_channel="manual",
+                    )
+                )
+                db.session.add(
+                    EnergyReading(
+                        facility_id=facility.id,
+                        reading_type="fuelwood",
+                        period_start=period_start,
+                        period_end=period_end,
+                        quantity=fuelwood_m3,
+                        unit="m3",
+                        cost_kes=round(fuelwood_m3 * fuelwood_price_kes),
+                        source_channel="manual",
+                    )
+                )
+                rows_inserted += 4
+
+        db.session.commit()
+        click.echo(f"seeded {rows_inserted} ledger rows across {len(facilities)} facilit(y/ies)")
