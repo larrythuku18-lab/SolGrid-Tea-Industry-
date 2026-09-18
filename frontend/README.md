@@ -36,7 +36,12 @@ console reference) at the user's explicit request — see `src/styles/theme.css`
   `expected_generation_kwh` is present — comparing it against the solid
   actual bar is the point, see the root README's "Weather-adjusted
   expected generation" entry. **Presentation data, not real telemetry**
-  — see the root README's deviation #9.
+  — see the root README's deviation #9. Mark specs follow the dataviz
+  skill's method (`lib/chart.ts`'s `roundedTopBarPath`: bars <=24px thick,
+  rounded only at the data end, square at the baseline; 2px lines; ~10%
+  area-fill washes; hairline recessive gridlines) — the earlier pass had
+  30px solid-cornered bars and a 22% area fill, which read as bold/loud
+  rather than considered.
 
 Overview and Benchmark default to the facility's most recent
 production-record period rather than the current calendar month — a

@@ -92,7 +92,7 @@ export function BatteryHistoryChart({ points, domainStart, domainEnd }: BatteryH
       >
         <defs>
           <linearGradient id="soc-area-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--volt)" stopOpacity="0.22" />
+            <stop offset="0%" stopColor="var(--volt)" stopOpacity="0.12" />
             <stop offset="100%" stopColor="var(--volt)" stopOpacity="0" />
           </linearGradient>
         </defs>
@@ -130,7 +130,7 @@ export function BatteryHistoryChart({ points, domainStart, domainEnd }: BatteryH
               y2={PAD_TOP + plotHeight}
             />
             <circle cx={newestSoc.x} cy={newestSoc.y} r={7} className="chart-halo" />
-            <circle cx={newestSoc.x} cy={newestSoc.y} r={3.4} className="chart-dot chart-dot-live" />
+            <circle cx={newestSoc.x} cy={newestSoc.y} r={4} className="chart-dot chart-dot-live" />
           </g>
         )}
       </svg>

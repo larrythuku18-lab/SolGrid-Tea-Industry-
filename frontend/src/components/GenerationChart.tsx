@@ -1,4 +1,4 @@
-import { smoothPath } from "../lib/chart";
+import { roundedTopBarPath, smoothPath } from "../lib/chart";
 import { formatMonthLabel, parseIsoInstant } from "../lib/dates";
 import type { GenerationVsConsumptionPoint } from "../types/api";
 
@@ -16,7 +16,9 @@ const PAD_LEFT = 54;
 const PAD_RIGHT = 16;
 const PAD_TOP = 16;
 const PAD_BOTTOM = 28;
-const MAX_BAR_WIDTH = 30;
+// <=24px thick, rounded only at the data end — see roundedTopBarPath.
+const MAX_BAR_WIDTH = 22;
+const BAR_RADIUS = 4;
 
 const ms = (iso: string) => parseIsoInstant(iso).getTime();
 
@@ -58,7 +60,7 @@ export function GenerationChart({ points, domainStart, domainEnd }: GenerationCh
   // single-month window doesn't produce one enormous bar. This is also what
   // keeps a freshly-appended month from resizing the older ones.
   const widthFor = (p: GenerationVsConsumptionPoint) =>
-    Math.max(3, Math.min(MAX_BAR_WIDTH, ((ms(p.period_end) - ms(p.period_start)) / spanMs) * plotWidth * 0.72));
+    Math.max(3, Math.min(MAX_BAR_WIDTH, ((ms(p.period_end) - ms(p.period_start)) / spanMs) * plotWidth * 0.55));
 
   const linePath = smoothPath(points.map((p) => ({ x: xForMs(midpointMs(p)), y: yFor(p.consumption_kwh) })));
   const lastPoint = points[points.length - 1];
@@ -89,14 +91,12 @@ export function GenerationChart({ points, domainStart, domainEnd }: GenerationCh
         {points.map((p) => {
           const barWidth = widthFor(p);
           const x = xForMs(midpointMs(p)) - barWidth / 2;
+          const y = yFor(p.generation_kwh);
+          const height = Math.max(0, yFor(0) - y);
           return (
-            <rect
+            <path
               key={p.period_start}
-              x={x}
-              y={yFor(p.generation_kwh)}
-              width={barWidth}
-              height={Math.max(0, yFor(0) - yFor(p.generation_kwh))}
-              rx={2}
+              d={roundedTopBarPath(x, y, barWidth, height, BAR_RADIUS)}
               className="chart-bar"
             />
           );
@@ -111,14 +111,12 @@ export function GenerationChart({ points, domainStart, domainEnd }: GenerationCh
           if (p.expected_generation_kwh === null) return null;
           const barWidth = widthFor(p);
           const x = xForMs(midpointMs(p)) - barWidth / 2;
+          const y = yFor(p.expected_generation_kwh);
+          const height = Math.max(0, yFor(0) - y);
           return (
-            <rect
+            <path
               key={`expected-${p.period_start}`}
-              x={x}
-              y={yFor(p.expected_generation_kwh)}
-              width={barWidth}
-              height={Math.max(0, yFor(0) - yFor(p.expected_generation_kwh))}
-              rx={2}
+              d={roundedTopBarPath(x, y, barWidth, height, BAR_RADIUS)}
               className="chart-bar-expected"
             />
           );
@@ -130,7 +128,7 @@ export function GenerationChart({ points, domainStart, domainEnd }: GenerationCh
             key={p.period_start}
             cx={xForMs(midpointMs(p))}
             cy={yFor(p.consumption_kwh)}
-            r={3.2}
+            r={4}
             className="chart-dot"
           />
         ))}
@@ -148,7 +146,7 @@ export function GenerationChart({ points, domainStart, domainEnd }: GenerationCh
           <circle
             cx={xForMs(midpointMs(lastPoint))}
             cy={yFor(lastPoint.consumption_kwh)}
-            r={3.6}
+            r={4}
             className="chart-dot chart-dot-live"
           />
         </g>
