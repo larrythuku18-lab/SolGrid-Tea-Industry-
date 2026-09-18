@@ -18,6 +18,7 @@ from solgrid_tea.models import (
     ProductionRecord,
     SolarHealthReading,
 )
+from solgrid_tea.services.irradiance_sync import IrradianceFetchError, fetch_daily_ghi
 
 
 def register_cli(app):
@@ -310,18 +311,27 @@ def register_cli(app):
     # solar_capacity_factor field, "no safe platform default"). Not used
     # anywhere in solar_insights.py's read path, which deliberately avoids
     # assuming a capacity factor at query time.
+    # lat/lon are approximate points within the general Kenyan tea highlands
+    # (South Rift and Central Kenya belts respectively) — not a verified GPS
+    # survey of either real site. Good enough to look up real irradiance for
+    # weather-adjusted generation checks (see sync-solar-irradiance below);
+    # replace with the actual site coordinates before this feeds anything
+    # beyond a demo, same caveat as every other placeholder in this file.
     _SOLAR_DEMO_PROFILES = {
         "Kipchabo": {
             "install_capacity_kw": 150, "capacity_factor": 0.205,
             "start_soh_pct": 98.0, "soh_monthly_drop_pct": 0.5, "trouble": False,
+            "latitude": -0.78, "longitude": 35.34,
         },
         "Gatitu": {
             "install_capacity_kw": 80, "capacity_factor": 0.195,
             "start_soh_pct": 98.0, "soh_monthly_drop_pct": 1.1, "trouble": True,
+            "latitude": -0.42, "longitude": 36.95,
         },
         "_default": {
             "install_capacity_kw": 60, "capacity_factor": 0.20,
             "start_soh_pct": 97.0, "soh_monthly_drop_pct": 0.6, "trouble": False,
+            "latitude": -0.5, "longitude": 36.5,
         },
     }
     # Kenya's solar irradiance is fairly consistent year-round near the
@@ -388,6 +398,10 @@ def register_cli(app):
             profile = _SOLAR_DEMO_PROFILES.get(facility.name, _SOLAR_DEMO_PROFILES["_default"])
             if facility.install_capacity_kw is None:
                 facility.install_capacity_kw = profile["install_capacity_kw"]
+            if facility.latitude is None:
+                facility.latitude = profile["latitude"]
+            if facility.longitude is None:
+                facility.longitude = profile["longitude"]
 
             trouble_index = len(periods) - 1 if profile["trouble"] else None
             soh = profile["start_soh_pct"]
@@ -607,3 +621,70 @@ def register_cli(app):
                 time.sleep(interval_s)
         except KeyboardInterrupt:
             click.echo(f"\nstopped after {ticks} reading(s) per facility")
+
+    @app.cli.command("sync-solar-irradiance")
+    @click.option("--org-id", "org_id", required=True, type=click.UUID)
+    @click.option(
+        "--days", default=240, show_default=True,
+        help="How many days back to backfill (Open-Meteo's archive has years of history if more is needed).",
+    )
+    def sync_solar_irradiance(org_id, days):
+        """Fetch and cache real daily solar irradiance (Open-Meteo, no API
+        key) for every facility in an org that has latitude/longitude set —
+        see migrations/0003 and services/irradiance_sync.py.
+
+        Populates solar_irradiance_daily, which generation_vs_consumption_series
+        reads to compute weather-adjusted expected generation instead of
+        solar_insights.py's cruder self-relative fallback. Safe to re-run:
+        upserts by (facility_id, day). A facility with no coordinates on
+        file is skipped with a message, not an error — run seed-solar-demo
+        first (or set them by hand) if that's why nothing gets cached.
+        """
+        org_id = uuid.UUID(str(org_id))
+        db.session.execute(
+            text("SELECT set_config('app.org_id', :org_id, true)"), {"org_id": str(org_id)}
+        )
+        facilities = db.session.scalars(
+            select(Facility).where(Facility.organization_id == org_id)
+        ).all()
+        if not facilities:
+            click.echo(f"no facilities found for org {org_id}")
+            return
+
+        end = date.today()
+        start = end - timedelta(days=days)
+
+        for facility in facilities:
+            if facility.latitude is None or facility.longitude is None:
+                click.echo(f"{facility.name}: no coordinates on file, skipping")
+                continue
+
+            try:
+                ghi_by_day = fetch_daily_ghi(
+                    float(facility.latitude), float(facility.longitude), start, end
+                )
+            except IrradianceFetchError as exc:
+                click.echo(f"{facility.name}: fetch failed — {exc}")
+                continue
+
+            # set_config(..., is_local=true) is scoped to one transaction —
+            # committing per facility (below) ends it, so app.org_id has to
+            # be re-applied on every iteration, not just once before the
+            # loop. Same trap this project has hit before; see
+            # tenant_context's own notes on why is_local is used at all.
+            db.session.execute(
+                text("SELECT set_config('app.org_id', :org_id, true)"), {"org_id": str(org_id)}
+            )
+            for day, ghi in ghi_by_day.items():
+                db.session.execute(
+                    text(
+                        "INSERT INTO solar_irradiance_daily (facility_id, day, ghi_kwh_per_m2, source) "
+                        "VALUES (:f, :day, :ghi, 'open-meteo') "
+                        "ON CONFLICT (facility_id, day) DO UPDATE SET "
+                        "ghi_kwh_per_m2 = EXCLUDED.ghi_kwh_per_m2, source = EXCLUDED.source, "
+                        "fetched_at = now()"
+                    ),
+                    {"f": str(facility.id), "day": day, "ghi": ghi},
+                )
+            db.session.commit()
+            click.echo(f"{facility.name}: cached {len(ghi_by_day)} day(s) of irradiance")

@@ -32,6 +32,12 @@ class GenerationVsConsumptionPoint(BaseModel):
     generation_kwh: float
     consumption_kwh: float  # grid + diesel(kWh-equiv) + solar_generation — total electrical load
     self_consumption_pct: float | None  # share of consumption covered by solar, None if consumption is 0
+    # Weather-adjusted expected generation for this period — install_capacity_kw
+    # x cached daily irradiance x a standard performance ratio (see
+    # solar_insights.py). None when there's no install capacity on file or
+    # irradiance coverage for the period is too incomplete to trust — never
+    # a guess standing in for missing data.
+    expected_generation_kwh: float | None = None
 
 
 class GenerationVsConsumptionSeries(BaseModel):

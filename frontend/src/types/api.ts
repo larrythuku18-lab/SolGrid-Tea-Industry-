@@ -112,6 +112,11 @@ export interface GenerationVsConsumptionPoint {
   generation_kwh: number;
   consumption_kwh: number;
   self_consumption_pct: number | null;
+  /** Weather-adjusted expected kWh for this period (install capacity x
+   * cached irradiance x a standard performance ratio). Null when there's
+   * no install capacity on file or irradiance coverage for the period is
+   * too incomplete to trust — never a guess standing in for missing data. */
+  expected_generation_kwh: number | null;
 }
 
 export interface GenerationVsConsumptionSeries {

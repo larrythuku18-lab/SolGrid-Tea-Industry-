@@ -2,7 +2,7 @@
 test_report_engine.py. Needs a live database."""
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import text
@@ -55,6 +55,16 @@ def _add_energy_reading(session, facility_id, reading_type, period_start, period
             "VALUES (:f, :rt, :ps, :pe, :q, 'kWh', 'manual')"
         ),
         {"f": str(facility_id), "rt": reading_type, "ps": period_start, "pe": period_end, "q": quantity},
+    )
+
+
+def _add_irradiance(session, facility_id, day, ghi_kwh_per_m2, source="test"):
+    session.execute(
+        text(
+            "INSERT INTO solar_irradiance_daily (facility_id, day, ghi_kwh_per_m2, source) "
+            "VALUES (:f, :day, :ghi, :source)"
+        ),
+        {"f": str(facility_id), "day": day, "ghi": ghi_kwh_per_m2, "source": source},
     )
 
 
@@ -234,3 +244,74 @@ def test_low_soc_insight_ignores_readings_outside_recent_window(db_session, faci
     summary = solar_health_summary(db_session, facility, date(2026, 8, 5))
 
     assert not any("running low" in i.message.lower() or "load may be" in i.message for i in summary.insights)
+
+
+def test_series_computes_expected_generation_from_cached_irradiance(db_session, facility):
+    for offset in range(31):
+        _add_irradiance(db_session, facility, date(2026, 8, 1) + timedelta(days=offset), 5.0)
+    _add_energy_reading(
+        db_session, facility, "solar_generation", date(2026, 8, 1), date(2026, 8, 31), 5000
+    )
+
+    series = generation_vs_consumption_series(db_session, facility, date(2026, 8, 1), date(2026, 8, 31))
+
+    assert len(series.points) == 1
+    # install_capacity_kw (100, from the fixture) x total GHI (31 x 5.0) x
+    # the 0.78 performance ratio.
+    assert series.points[0].expected_generation_kwh == pytest.approx(100 * (31 * 5.0) * 0.78)
+
+
+def test_expected_generation_is_none_below_the_coverage_threshold(db_session, facility):
+    # Only 10 of 31 days cached — well under the 90% coverage floor, so the
+    # sum would understate a full month's expected yield if used anyway.
+    for offset in range(10):
+        _add_irradiance(db_session, facility, date(2026, 8, 1) + timedelta(days=offset), 5.0)
+    _add_energy_reading(
+        db_session, facility, "solar_generation", date(2026, 8, 1), date(2026, 8, 31), 5000
+    )
+
+    series = generation_vs_consumption_series(db_session, facility, date(2026, 8, 1), date(2026, 8, 31))
+
+    assert series.points[0].expected_generation_kwh is None
+
+
+def test_health_summary_flags_weather_adjusted_underperformance(db_session, facility):
+    for offset in range(31):
+        _add_irradiance(db_session, facility, date(2026, 8, 1) + timedelta(days=offset), 5.0)
+    _add_energy_reading(
+        db_session, facility, "solar_generation", date(2026, 8, 1), date(2026, 8, 31), 5000
+    )
+    _add_health_reading(
+        db_session, facility, datetime(2026, 8, 31, 15, tzinfo=timezone.utc), battery_soh_pct=95.0
+    )
+
+    summary = solar_health_summary(db_session, facility, date(2026, 8, 31))
+
+    assert any("what recorded irradiance" in i.message for i in summary.insights)
+
+
+def test_weather_adjusted_check_avoids_a_false_positive_the_fallback_would_raise(db_session, facility):
+    # June was sunny and generated a lot; August was genuinely cloudy and
+    # generated much less — normal, not a fault. The self-relative fallback
+    # (comparing August against June's trailing average) would misread this
+    # as an 80%+ drop and wrongly flag it. Weather-adjustment should compare
+    # August's actual output against what August's own (lower) irradiance
+    # predicts instead, and find nothing wrong.
+    _add_energy_reading(
+        db_session, facility, "solar_generation", date(2026, 6, 1), date(2026, 6, 30), 10000
+    )
+    for offset in range(31):
+        _add_irradiance(db_session, facility, date(2026, 8, 1) + timedelta(days=offset), 1.7)
+    _add_energy_reading(
+        db_session, facility, "solar_generation", date(2026, 8, 1), date(2026, 8, 31), 4000
+    )
+    _add_health_reading(
+        db_session, facility, datetime(2026, 8, 31, 15, tzinfo=timezone.utc), battery_soh_pct=95.0
+    )
+
+    summary = solar_health_summary(db_session, facility, date(2026, 8, 31))
+
+    assert not any(
+        "irradiance" in i.message or "trailing average" in i.message for i in summary.insights
+    )
+    assert any(i.severity == "info" for i in summary.insights)

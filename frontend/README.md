@@ -31,8 +31,12 @@ console reference) at the user's explicit request — see `src/styles/theme.css`
   not a charting library. The live badge states the *connection*, not
   the data — it can be green while the underlying data is stale (the
   page says so separately, via `freshness.is_stale`) and amber only while
-  actively reconnecting. **Presentation data, not real telemetry** — see
-  the root README's deviation #9.
+  actively reconnecting. `GenerationChart.tsx` overlays a dashed
+  "expected (weather-adjusted)" outline on each bar when
+  `expected_generation_kwh` is present — comparing it against the solid
+  actual bar is the point, see the root README's "Weather-adjusted
+  expected generation" entry. **Presentation data, not real telemetry**
+  — see the root README's deviation #9.
 
 Overview and Benchmark default to the facility's most recent
 production-record period rather than the current calendar month — a

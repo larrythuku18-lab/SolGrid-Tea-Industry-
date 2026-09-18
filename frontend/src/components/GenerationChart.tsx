@@ -36,7 +36,10 @@ export function GenerationChart({ points, domainStart, domainEnd }: GenerationCh
 
   const plotWidth = WIDTH - PAD_LEFT - PAD_RIGHT;
   const plotHeight = HEIGHT - PAD_TOP - PAD_BOTTOM;
-  const maxVal = Math.max(...points.map((p) => Math.max(p.generation_kwh, p.consumption_kwh)), 1);
+  const maxVal = Math.max(
+    ...points.map((p) => Math.max(p.generation_kwh, p.consumption_kwh, p.expected_generation_kwh ?? 0)),
+    1,
+  );
 
   const midpointMs = (p: GenerationVsConsumptionPoint) => (ms(p.period_start) + ms(p.period_end)) / 2;
   const startMs = domainStart ? ms(domainStart) : ms(points[0].period_start);
@@ -99,6 +102,28 @@ export function GenerationChart({ points, domainStart, domainEnd }: GenerationCh
           );
         })}
 
+        {/* Weather-adjusted expected generation, as a dashed outline over
+            the same bar — only drawn where cached irradiance covers the
+            period (see solar_insights.py). Comparing the outline height
+            against the filled bar is the point: it's what makes "cloudy
+            month" visually distinct from "underperforming panel". */}
+        {points.map((p) => {
+          if (p.expected_generation_kwh === null) return null;
+          const barWidth = widthFor(p);
+          const x = xForMs(midpointMs(p)) - barWidth / 2;
+          return (
+            <rect
+              key={`expected-${p.period_start}`}
+              x={x}
+              y={yFor(p.expected_generation_kwh)}
+              width={barWidth}
+              height={Math.max(0, yFor(0) - yFor(p.expected_generation_kwh))}
+              rx={2}
+              className="chart-bar-expected"
+            />
+          );
+        })}
+
         <path d={linePath} className="chart-line" fill="none" />
         {points.map((p) => (
           <circle
@@ -150,6 +175,12 @@ export function GenerationChart({ points, domainStart, domainEnd }: GenerationCh
           <span className="swatch-line" />
           Electrical consumption (kWh)
         </span>
+        {points.some((p) => p.expected_generation_kwh !== null) && (
+          <span className="leg">
+            <span className="swatch-outline" />
+            Expected (weather-adjusted)
+          </span>
+        )}
       </div>
     </div>
   );

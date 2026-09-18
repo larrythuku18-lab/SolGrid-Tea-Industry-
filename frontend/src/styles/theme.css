@@ -685,6 +685,21 @@ tbody tr:hover {
   }
 }
 
+.chart-bar-expected {
+  fill: none;
+  stroke: var(--ink-dim);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+
+.swatch-outline {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1.5px dashed var(--ink-dim);
+  flex: 0 0 auto;
+}
+
 .chart-line {
   stroke: var(--volt);
   stroke-width: 2.5;

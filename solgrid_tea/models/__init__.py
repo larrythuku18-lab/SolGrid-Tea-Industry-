@@ -6,6 +6,7 @@ from .reference_data import EmissionFactor, EnergyContentFactor
 from .report_snapshot import ReportSnapshot
 from .scenario_run import ScenarioRun
 from .solar_health_reading import SolarHealthReading
+from .solar_irradiance_daily import SolarIrradianceDaily
 from .tariff import Tariff
 from .user import AppUser
 
@@ -21,4 +22,5 @@ __all__ = [
     "ScenarioRun",
     "ReportSnapshot",
     "SolarHealthReading",
+    "SolarIrradianceDaily",
 ]

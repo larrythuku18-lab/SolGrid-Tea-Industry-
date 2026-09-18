@@ -4,13 +4,23 @@ docstring, so seeded/demo data has a real read path to land on.
 
 Insight rules are plain code, not a model — deliberately, matching the
 rest of this system's "deterministic only" stance (see calculation_engine
-and report_engine). They also avoid assuming a capacity factor: the
-scenario engine already treats solar_capacity_factor as something with
-"no safe platform default — verify for this site" and takes it as a
-required operator input rather than guessing. An underperformance insight
-here follows the same discipline — it compares a site against its own
-trailing history, not against an assumed expected yield nobody has
-verified for either factory.
+and report_engine).
+
+The underperformance check has two tiers, in order of preference:
+
+1. Weather-adjusted, when cached irradiance is available (migrations/0003,
+   irradiance_sync.py): expected kWh = install_capacity_kw x recorded GHI
+   x a standard PVWatts-style system performance ratio. That ratio
+   (_SYSTEM_PERFORMANCE_RATIO below) is a well-established industry
+   derate for temperature, wiring, inverter, and soiling losses — not a
+   number invented for this app, the same category of constant PVWatts
+   itself uses.
+2. Self-relative, when it isn't: compares a site against its own trailing
+   history. This is the fallback, not the ideal — it can't distinguish a
+   cloudy week from a failing inverter — but it makes no assumption about
+   expected yield, matching the same discipline the scenario engine
+   already applies to solar_capacity_factor ("no safe platform default —
+   verify for this site").
 """
 
 from collections import defaultdict
@@ -20,7 +30,12 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from solgrid_tea.models import EnergyReading, Facility, SolarHealthReading
+from solgrid_tea.models import (
+    EnergyReading,
+    Facility,
+    SolarHealthReading,
+    SolarIrradianceDaily,
+)
 from solgrid_tea.schemas.solar import (
     GenerationVsConsumptionPoint,
     GenerationVsConsumptionSeries,
@@ -31,9 +46,8 @@ from solgrid_tea.schemas.solar import (
 )
 from solgrid_tea.services.reference_lookup import latest_energy_content_factor
 
-# Below this share of its own trailing-average generation, a period is
-# flagged as underperforming — a relative check against the site's own
-# history, not an assumed capacity factor (see module docstring).
+# Below this share of expected (weather-adjusted) or trailing-average
+# (self-relative) generation, a period is flagged as underperforming.
 _UNDERPERFORMANCE_THRESHOLD_PCT = 80.0
 _LOW_SOC_WARN_THRESHOLD_PCT = 25.0
 _SOH_CRITICAL_THRESHOLD_PCT = 70.0
@@ -43,6 +57,50 @@ _SOH_FAST_DEGRADATION_DROP_PCT = 3.0
 # purpose. Readings arrive roughly daily; averaging that over the whole
 # trailing_days window (months) would blur past a real short-term problem.
 _RECENT_SOC_WINDOW_DAYS = 14
+
+# PVWatts-style system loss derate (temperature, wiring, inverter,
+# soiling) — see module docstring. 0.78 is PVWatts' own default.
+_SYSTEM_PERFORMANCE_RATIO = 0.78
+# Below this share of a period's days having cached irradiance, treat the
+# period as having no weather data at all rather than computing an
+# expected value from a partial, misleadingly-low GHI sum.
+_MIN_IRRADIANCE_COVERAGE_RATIO = 0.9
+
+
+def _expected_generation_by_period(
+    session: Session,
+    facility_id: UUID,
+    install_capacity_kw: float | None,
+    periods: list[tuple[date, date]],
+) -> dict[tuple[date, date], float | None]:
+    """Weather-adjusted expected kWh per (period_start, period_end), or None
+    per-period where there's no install capacity or insufficient cached
+    irradiance coverage to trust the number (see
+    _MIN_IRRADIANCE_COVERAGE_RATIO)."""
+    if install_capacity_kw is None or not periods:
+        return dict.fromkeys(periods)
+
+    overall_start = min(p[0] for p in periods)
+    overall_end = max(p[1] for p in periods)
+    rows = session.scalars(
+        select(SolarIrradianceDaily).where(
+            SolarIrradianceDaily.facility_id == facility_id,
+            SolarIrradianceDaily.day >= overall_start,
+            SolarIrradianceDaily.day <= overall_end,
+        )
+    ).all()
+    ghi_by_day = {r.day: float(r.ghi_kwh_per_m2) for r in rows}
+
+    expected: dict[tuple[date, date], float | None] = {}
+    for p_start, p_end in periods:
+        days_in_period = (p_end - p_start).days + 1
+        period_days = [p_start + timedelta(days=i) for i in range(days_in_period)]
+        matched = [ghi_by_day[d] for d in period_days if d in ghi_by_day]
+        if len(matched) < days_in_period * _MIN_IRRADIANCE_COVERAGE_RATIO:
+            expected[(p_start, p_end)] = None
+            continue
+        expected[(p_start, p_end)] = install_capacity_kw * sum(matched) * _SYSTEM_PERFORMANCE_RATIO
+    return expected
 
 
 def generation_vs_consumption_series(
@@ -62,6 +120,16 @@ def generation_vs_consumption_series(
         by_period[(reading.period_start, reading.period_end)][reading.reading_type] += float(
             reading.quantity
         )
+
+    facility = session.get(Facility, facility_id)
+    install_capacity_kw = (
+        float(facility.install_capacity_kw)
+        if facility is not None and facility.install_capacity_kw is not None
+        else None
+    )
+    expected_by_period = _expected_generation_by_period(
+        session, facility_id, install_capacity_kw, sorted(by_period.keys())
+    )
 
     points = []
     for (p_start, p_end), quantities in sorted(by_period.items()):
@@ -83,15 +151,10 @@ def generation_vs_consumption_series(
                 generation_kwh=generation_kwh,
                 consumption_kwh=consumption_kwh,
                 self_consumption_pct=self_consumption_pct,
+                expected_generation_kwh=expected_by_period.get((p_start, p_end)),
             )
         )
 
-    facility = session.get(Facility, facility_id)
-    install_capacity_kw = (
-        float(facility.install_capacity_kw)
-        if facility is not None and facility.install_capacity_kw is not None
-        else None
-    )
     return GenerationVsConsumptionSeries(
         facility_id=facility_id, install_capacity_kw=install_capacity_kw, points=points
     )
@@ -99,20 +162,41 @@ def generation_vs_consumption_series(
 
 def _generation_insight(points: list[GenerationVsConsumptionPoint]) -> SolarInsight | None:
     generating_points = [p for p in points if p.generation_kwh > 0]
-    if len(generating_points) < 2:
+    if not generating_points:
         return None
-    *history, latest = generating_points
+    latest = generating_points[-1]
+    month_label = latest.period_start.strftime("%B %Y")
+
+    # Tier 1: weather-adjusted, when cached irradiance covers this period.
+    if latest.expected_generation_kwh is not None and latest.expected_generation_kwh > 0:
+        pct_of_expected = latest.generation_kwh / latest.expected_generation_kwh * 100
+        if pct_of_expected < _UNDERPERFORMANCE_THRESHOLD_PCT:
+            return SolarInsight(
+                severity="warn",
+                message=(
+                    f"Generation in {month_label} was {pct_of_expected:.0f}% of what recorded "
+                    "irradiance for that period predicts — check for shading, panel soiling, "
+                    "or an inverter fault."
+                ),
+            )
+        return None
+
+    # Tier 2: self-relative fallback (see module docstring for why).
+    history = generating_points[:-1]
+    if not history:
+        return None
     trailing_avg = sum(p.generation_kwh for p in history) / len(history)
     if trailing_avg <= 0:
         return None
     pct_of_average = latest.generation_kwh / trailing_avg * 100
     if pct_of_average < _UNDERPERFORMANCE_THRESHOLD_PCT:
-        month_label = latest.period_start.strftime("%B %Y")
         return SolarInsight(
             severity="warn",
             message=(
                 f"Generation in {month_label} was {pct_of_average:.0f}% of this site's "
-                "trailing average — check for shading, panel soiling, or an inverter fault."
+                "trailing average — check for shading, panel soiling, or an inverter fault. "
+                "(No cached irradiance for this period, so this compares against the site's "
+                "own history rather than actual weather.)"
             ),
         )
     return None

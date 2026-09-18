@@ -72,12 +72,30 @@ sequencing — see deviation #9 below for why, and **Solar monitoring
   (solar generation against total electrical load: grid +
   diesel-kWh-equivalent + solar) and panel/battery health (state of
   charge, state of health, fault status) with plain-code, deterministic
-  insights — no model, same "no invented assumptions" discipline as the
-  scenario engine: an underperformance insight compares a site against
-  its own trailing history rather than an assumed capacity factor.
-  **Presentation data, not real telemetry** — see deviation #9. `flask
-  seed-solar-demo --org-id <id>` backfills daily health readings and
-  monthly generation; safe to re-run.
+  insights — no model. **Presentation data, not real telemetry** — see
+  deviation #9. `flask seed-solar-demo --org-id <id>` backfills daily
+  health readings and monthly generation; safe to re-run.
+- **Weather-adjusted expected generation** (migration
+  `0003_solar_irradiance.py`, `solgrid_tea/services/irradiance_sync.py`)
+  — the underperformance check now has two tiers. When cached irradiance
+  covers the period, expected kWh = `install_capacity_kw x recorded GHI
+  x a standard PVWatts-style performance ratio (0.78)` — real physics,
+  not a model, and not an invented capacity factor (0.78 is PVWatts' own
+  default derate for temperature/wiring/inverter/soiling losses, the
+  same category of constant PVWatts itself uses). Without cached
+  irradiance it falls back to the cruder self-relative comparison
+  (against the site's own trailing average) that's all this had before —
+  see `_generation_insight`'s two tiers in `solar_insights.py`, and the
+  test proving the weather-adjusted tier avoids a false positive the
+  fallback alone would raise (a genuinely cloudy month misread as a
+  fault). `flask sync-solar-irradiance --org-id <id>` fetches and caches
+  real daily GHI from Open-Meteo's archive API — **no API key needed**,
+  which was the point: this app already needs exactly one
+  (`ANTHROPIC_API_KEY`) and this doesn't add a second. Facility
+  `latitude`/`longitude` are approximate placeholders seeded by
+  `seed-solar-demo` (general Kenyan tea highlands, not a GPS survey of
+  either real site) — same disclosure standard as every other
+  placeholder in this file.
 - **Live feed** (`GET /api/v1/solar/live`, `solgrid_tea/services/solar_live.py`)
   — server-sent events over the same two tables the REST endpoints read.
   Not a simulated tick: `flask seed-solar-live --org-id <id>` appends
@@ -204,6 +222,17 @@ and repeated here so it's not buried in code comments:
    choice for what actually exists: real rows landing in Postgres,
    pushed to an open connection, no message broker to stand up for
    readings nothing is currently producing.
+   Extended once more, also at explicit request, in a direction the
+   architecture doc never anticipated at all: `facility.latitude`/
+   `longitude` and a `solar_irradiance_daily` cache table (migration
+   0003) feed a weather-adjusted expected-generation check
+   (`irradiance_sync.py`, Open-Meteo). This is the one piece of "solar
+   optimization" that turned out not to need a model — it's the same
+   deterministic-physics category as PVWatts, just implemented directly
+   rather than via the `pvlib` library, which was judged unjustified
+   weight (numpy/pandas/scipy) for a simplified GHI-based estimate when
+   neither factory has verified panel tilt/azimuth to feed a fuller
+   model anyway.
 
 ## Local setup
 
@@ -223,6 +252,7 @@ flask --app wsgi.py seed-org --org-name "NTZDC" --admin-email you@example.com \
 flask --app wsgi.py seed-reference-data --effective-from 2025-01-01
 flask --app wsgi.py seed-demo-history --org-id <organization_id> --months 8
 flask --app wsgi.py seed-solar-demo --org-id <organization_id> --months 8
+flask --app wsgi.py sync-solar-irradiance --org-id <organization_id> --days 260
 
 flask --app wsgi.py run
 
