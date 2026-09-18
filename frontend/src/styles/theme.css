@@ -638,6 +638,15 @@ tbody tr:hover {
   flex: 0 0 auto;
 }
 
+.swatch-line.soc {
+  border-top-color: var(--volt);
+}
+
+.swatch-line.soh {
+  border-top-color: var(--brand);
+  border-top-style: dashed;
+}
+
 /* ---------- generation vs. consumption chart ---------- */
 .chart-svg {
   width: 100%;
@@ -659,6 +668,21 @@ tbody tr:hover {
 .chart-bar {
   fill: var(--solar);
   opacity: 0.85;
+  /* Grows in from the axis once per bar, not once per render: React reuses
+     the element for an existing period, so only a period that has just
+     appeared animates. */
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: bar-rise 0.45s ease-out both;
+}
+
+@keyframes bar-rise {
+  from {
+    transform: scaleY(0.02);
+  }
+  to {
+    transform: scaleY(1);
+  }
 }
 
 .chart-line {
@@ -672,6 +696,75 @@ tbody tr:hover {
   fill: var(--panel);
   stroke: var(--volt);
   stroke-width: 2;
+}
+
+/* Newest sample on a chart fed by the live stream. */
+.chart-dot-live {
+  r: 3.4;
+  fill: var(--volt);
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+
+.chart-halo {
+  fill: none;
+  stroke: var(--volt);
+  stroke-width: 1.5;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: chart-halo 2.2s ease-out infinite;
+}
+
+@keyframes chart-halo {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+/* The chart's "write head": a one-shot vertical flash at the position of a
+   reading that just arrived. Keyed on the point count in the component, so
+   it replays per arrival instead of looping and nagging. */
+.chart-sweep {
+  stroke: var(--solar);
+  stroke-width: 1.5;
+  opacity: 0;
+  animation: sweep-flash 1.2s ease-out;
+}
+
+@keyframes sweep-flash {
+  0% {
+    opacity: 0.85;
+    stroke-width: 3;
+  }
+  100% {
+    opacity: 0;
+    stroke-width: 1;
+  }
+}
+
+.chart-area {
+  stroke: none;
+}
+
+.chart-line-soc {
+  stroke: var(--volt);
+  stroke-width: 2;
+}
+
+.chart-line-soh {
+  stroke: var(--brand);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+  opacity: 0.85;
 }
 
 /* ---------- solar health ---------- */
@@ -714,7 +807,9 @@ tbody tr:hover {
   height: 100%;
   border-radius: 999px;
   background: var(--brand);
-  transition: width 0.2s;
+  /* Slow enough that a live value change reads as movement rather than a
+     jump cut. */
+  transition: width 0.6s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .gauge-fill.warn {
@@ -759,6 +854,96 @@ tbody tr:hover {
 
 .insight.critical .insight-dot {
   background: var(--alert);
+}
+
+/* ---------- live feed indicator ---------- */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-dark);
+  font-family: "JetBrains Mono", monospace;
+}
+
+/* The badge states the *connection*, not the data, so it is allowed to look
+   different from the data's freshness: green while streaming, amber while
+   retrying, grey when there is nothing to stream for. */
+.live-badge.offline {
+  color: var(--solar);
+}
+
+.live-badge.idle,
+.live-badge.connecting {
+  color: var(--ink-faint);
+}
+
+.live-dot {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand);
+  flex: 0 0 auto;
+}
+
+/* Only a live stream pings: a reassuring pulse on a disconnected feed would
+   be the one thing this badge must never do. */
+.live-badge.live .live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--brand);
+  animation: live-ping 1.6s ease-out infinite;
+  opacity: 0;
+}
+
+.live-badge.offline .live-dot {
+  background: var(--solar);
+}
+
+.live-badge.idle .live-dot,
+.live-badge.connecting .live-dot {
+  background: var(--ink-faint);
+}
+
+.live-badge.connecting .live-dot {
+  animation: live-blink 1.1s ease-in-out infinite;
+}
+
+@keyframes live-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@keyframes live-ping {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+/* A number that just changed, flashed once. Applied with a key that only
+   changes when the value does, so it marks real movement. */
+.value-flash {
+  animation: value-flash 0.9s ease-out;
+  border-radius: 3px;
+}
+
+@keyframes value-flash {
+  0% {
+    background: rgba(5, 148, 80, 0.16);
+  }
+  100% {
+    background: transparent;
+  }
 }
 
 /* ---------- login ---------- */

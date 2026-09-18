@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from solgrid_tea.services.solar_insights import (
     generation_vs_consumption_series,
+    solar_health_history,
     solar_health_summary,
 )
 
@@ -168,3 +169,68 @@ def test_health_summary_flags_generation_well_below_trailing_average(db_session,
     summary = solar_health_summary(db_session, facility, date(2026, 8, 28))
 
     assert any("trailing average" in i.message for i in summary.insights)
+
+
+def test_health_history_returns_points_ascending(db_session, facility):
+    _add_health_reading(
+        db_session, facility, datetime(2026, 8, 3, 15, tzinfo=timezone.utc), battery_soc_pct=40.0
+    )
+    _add_health_reading(
+        db_session, facility, datetime(2026, 8, 1, 15, tzinfo=timezone.utc), battery_soc_pct=60.0
+    )
+    _add_health_reading(
+        db_session, facility, datetime(2026, 8, 2, 15, tzinfo=timezone.utc), battery_soc_pct=50.0
+    )
+
+    points = solar_health_history(db_session, facility, date(2026, 8, 1), date(2026, 8, 31))
+
+    assert [p.battery_soc_pct for p in points] == [60.0, 50.0, 40.0]
+    # Full timestamps, not dates — the chart a live feed appends to needs to
+    # place two readings taken on the same day at different x positions.
+    assert [p.ts for p in points] == [
+        datetime(2026, 8, 1, 15, tzinfo=timezone.utc),
+        datetime(2026, 8, 2, 15, tzinfo=timezone.utc),
+        datetime(2026, 8, 3, 15, tzinfo=timezone.utc),
+    ]
+
+
+def test_health_summary_trend_spans_the_full_time_window(db_session, facility):
+    # 10 daily readings, declining SoH — a row-count-based window (the old
+    # trailing_count=6 behavior) would only see the last 6 and understate
+    # the drop. trailing_days is date-based, so it should see all 10.
+    for day in range(1, 11):
+        _add_health_reading(
+            db_session,
+            facility,
+            datetime(2026, 8, day, 15, tzinfo=timezone.utc),
+            battery_soh_pct=100.0 - day,  # 99.0 .. 90.0
+        )
+
+    summary = solar_health_summary(db_session, facility, date(2026, 8, 10), trailing_days=30)
+
+    assert summary.battery_soh_trend_pct == pytest.approx(90.0 - 99.0)
+
+
+def test_low_soc_insight_ignores_readings_outside_recent_window(db_session, facility):
+    # An old low-SoC reading, well outside the ~14-day "recent" window the
+    # low-SoC check uses, plus healthy recent readings. Averaging the whole
+    # trailing_days window would wrongly drag in the old low reading.
+    _add_health_reading(
+        db_session,
+        facility,
+        datetime(2026, 6, 1, 15, tzinfo=timezone.utc),
+        battery_soc_pct=5.0,
+        battery_soh_pct=95.0,
+    )
+    for day in range(1, 6):
+        _add_health_reading(
+            db_session,
+            facility,
+            datetime(2026, 8, day, 15, tzinfo=timezone.utc),
+            battery_soc_pct=70.0,
+            battery_soh_pct=95.0,
+        )
+
+    summary = solar_health_summary(db_session, facility, date(2026, 8, 5))
+
+    assert not any("running low" in i.message.lower() or "load may be" in i.message for i in summary.insights)

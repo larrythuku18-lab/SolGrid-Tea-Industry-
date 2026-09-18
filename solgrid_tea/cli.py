@@ -1,7 +1,8 @@
 import calendar
 import random
+import time
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import click
 from sqlalchemy import select, text
@@ -332,14 +333,23 @@ def register_cli(app):
         7: 0.95, 8: 1.00, 9: 1.02, 10: 0.90, 11: 0.87, 12: 1.00,
     }
 
+    # Health telemetry granularity — one reading per day, not per month.
+    # Panel/battery state is exactly the kind of thing a real ESP32 would
+    # push far more often than a monthly ledger entry; seeding it that
+    # densely is what makes the health chart look like a real instrument
+    # feed instead of eight dots connected by straight lines.
+    _HEALTH_READING_HOUR_UTC = 15
+    _TROUBLE_WINDOW_DAYS = 12
+
     @app.cli.command("seed-solar-demo")
     @click.option("--org-id", "org_id", required=True, type=click.UUID)
     @click.option("--months", default=8, show_default=True, help="Completed calendar months to backfill.")
     @click.option("--seed", "rand_seed", default=None, type=int, help="Fix the RNG for reproducible output.")
     def seed_solar_demo(org_id, months, rand_seed):
-        """Backfill solar_generation energy_reading rows and
-        solar_health_reading (panel/battery) rows for every facility in an
-        org, and set facility.install_capacity_kw if it isn't already set.
+        """Backfill solar_generation energy_reading rows (monthly, matching
+        the ledger's billing cadence) and solar_health_reading rows (daily —
+        see _HEALTH_READING_HOUR_UTC above) for every facility in an org,
+        and set facility.install_capacity_kw if it isn't already set.
 
         Presentation tool only — see migrations/0002's docstring. Neither
         Kipchabo nor Gatitu has contracted panels yet; this data does not
@@ -370,6 +380,9 @@ def register_cli(app):
             periods.append((y, m))
         periods.reverse()  # oldest first, so SoH degrades forward in time
 
+        window_end = date(*periods[-1], calendar.monthrange(*periods[-1])[1])
+        trouble_start = window_end - timedelta(days=_TROUBLE_WINDOW_DAYS - 1)
+
         rows_inserted = 0
         for facility in facilities:
             profile = _SOLAR_DEMO_PROFILES.get(facility.name, _SOLAR_DEMO_PROFILES["_default"])
@@ -378,10 +391,16 @@ def register_cli(app):
 
             trouble_index = len(periods) - 1 if profile["trouble"] else None
             soh = profile["start_soh_pct"]
+            # Mean-reverting random walk, carried across the whole window
+            # (not reset per month) so the SoC line wanders naturally
+            # instead of jumping between independent monthly draws.
+            soc = rng.uniform(55, 70)
+            soc_target = 65.0
 
             for i, (year, month) in enumerate(periods):
                 period_start = date(year, month, 1)
                 period_end = date(year, month, calendar.monthrange(year, month)[1])
+                days_in_month = (period_end - period_start).days + 1
 
                 db.session.execute(
                     text(
@@ -394,12 +413,15 @@ def register_cli(app):
                 db.session.execute(
                     text(
                         "DELETE FROM solar_health_reading WHERE facility_id = :f "
-                        "AND ts >= :ps AND ts <= :pe"
+                        "AND ts >= :ps AND ts < :pe_next"
                     ),
-                    {"f": str(facility.id), "ps": period_start, "pe": period_end},
+                    {
+                        "f": str(facility.id),
+                        "ps": period_start,
+                        "pe_next": period_end + timedelta(days=1),
+                    },
                 )
 
-                days_in_month = (period_end - period_start).days + 1
                 seasonal = _SOLAR_SEASONAL_MULTIPLIER[month]
                 generation_kwh = round(
                     profile["install_capacity_kw"]
@@ -411,11 +433,8 @@ def register_cli(app):
                 )
 
                 is_trouble_month = trouble_index is not None and i == trouble_index
-                panel_status = "normal"
-                battery_status = "normal"
                 if is_trouble_month:
                     generation_kwh = round(generation_kwh * rng.uniform(0.55, 0.68))
-                    panel_status = "underperforming"
 
                 db.session.add(
                     EnergyReading(
@@ -429,29 +448,162 @@ def register_cli(app):
                         source_channel="manual",
                     )
                 )
+                rows_inserted += 1
 
-                soh = max(0.0, soh - profile["soh_monthly_drop_pct"] * rng.uniform(0.7, 1.3))
-                soc = rng.uniform(30, 45) if is_trouble_month else rng.uniform(50, 82)
-                panel_temp_c = rng.uniform(34, 48)
-                reading_ts = datetime(year, month, period_end.day, 12, 0, tzinfo=timezone.utc)
+                daily_soh_drop = profile["soh_monthly_drop_pct"] / days_in_month
+                for day_offset in range(days_in_month):
+                    day = period_start + timedelta(days=day_offset)
+                    in_trouble_window = profile["trouble"] and day >= trouble_start
 
-                db.session.add(
-                    SolarHealthReading(
-                        facility_id=facility.id,
-                        ts=reading_ts,
-                        battery_soc_pct=round(soc, 1),
-                        battery_soh_pct=round(soh, 1),
-                        panel_status=panel_status,
-                        battery_status=battery_status,
-                        panel_temp_c=round(panel_temp_c, 1),
-                        note="underperforming vs. trailing average" if is_trouble_month else None,
-                        source_channel="seed",
+                    soh = max(0.0, soh - daily_soh_drop * rng.uniform(0.5, 1.5))
+                    soc_target_today = 30.0 if in_trouble_window else soc_target
+                    soc += rng.uniform(-7, 7) + (soc_target_today - soc) * 0.08
+                    soc = min(96.0, max(12.0, soc))
+                    panel_temp_c = 30 + 10 * seasonal + rng.uniform(-3, 3)
+
+                    panel_status = "underperforming" if in_trouble_window else "normal"
+                    reading_ts = datetime(
+                        day.year, day.month, day.day, _HEALTH_READING_HOUR_UTC, 0,
+                        tzinfo=timezone.utc,
                     )
-                )
-                rows_inserted += 2
+
+                    db.session.add(
+                        SolarHealthReading(
+                            facility_id=facility.id,
+                            ts=reading_ts,
+                            battery_soc_pct=round(soc, 1),
+                            battery_soh_pct=round(soh, 1),
+                            panel_status=panel_status,
+                            battery_status="normal",
+                            panel_temp_c=round(panel_temp_c, 1),
+                            note="underperforming vs. trailing average" if in_trouble_window else None,
+                            source_channel="seed",
+                        )
+                    )
+                    rows_inserted += 1
 
         db.session.commit()
         click.echo(
             f"seeded {rows_inserted} solar rows across {len(facilities)} facilit(y/ies) "
             f"(install_capacity_kw set where it was null)"
         )
+
+    # A battery's state of charge follows the sun: the array charges it through
+    # the working day and the factory load drains it overnight. Kenya is UTC+3
+    # year-round (no DST), so a fixed offset is exact here rather than
+    # approximate — and it's what makes the live feed show a real daily curve
+    # instead of noise around a flat line.
+    _EAT_UTC_OFFSET_HOURS = 3
+    _LIVE_SOC_DAY_TARGET = 85.0
+    _LIVE_SOC_NIGHT_TARGET = 45.0
+    _LIVE_SOC_MIN = 12.0
+    _LIVE_SOC_MAX = 96.0
+    _LIVE_SOC_REVERSION = 0.25
+    _LIVE_PANEL_TEMP_DAY_C = 41.0
+    _LIVE_PANEL_TEMP_NIGHT_C = 27.0
+
+    @app.cli.command("seed-solar-live")
+    @click.option("--org-id", "org_id", required=True, type=click.UUID)
+    @click.option(
+        "--interval",
+        "interval_s",
+        default=4.0,
+        show_default=True,
+        type=click.FloatRange(1, 300),
+        help="Seconds between appended readings, per facility.",
+    )
+    @click.option(
+        "--ticks",
+        "max_ticks",
+        default=None,
+        type=int,
+        help="Stop after this many readings per facility (default: run until Ctrl-C).",
+    )
+    @click.option("--seed", "rand_seed", default=None, type=int, help="Fix the RNG for reproducible output.")
+    def seed_solar_live(org_id, interval_s, max_ticks, rand_seed):
+        """Append one solar_health_reading per facility every --interval
+        seconds, for demoing GET /api/v1/solar/live.
+
+        This exists because there is no real device feed yet (see
+        migrations/0002): the live endpoint streams real rows, so the only
+        honest way to watch it move is to have real rows actually arrive.
+        Run this in one terminal and open the Solar page in another — the
+        chart grows the way it will once ESP32 firmware is pushing to the
+        same table.
+
+        Presentation tool only, same as seed-solar-demo. Reads are written
+        with source_channel='seed' so synthetic readings stay distinguishable
+        from real ones. State of charge continues the facility's most recent
+        reading rather than restarting from a fresh draw, and state of health
+        is carried forward unchanged — SoH is a slow derived metric, and
+        inventing degradation for it every few seconds would show up in the
+        health insights as a fault that isn't happening.
+        """
+        rng = random.Random(rand_seed)
+        org_id = uuid.UUID(str(org_id))
+        ticks = 0
+        try:
+            while max_ticks is None or ticks < max_ticks:
+                # Fresh transaction (and tenant context) per tick, same pattern
+                # as seed-org / seed-solar-demo: set_config(..., is_local=true)
+                # only survives until this transaction ends.
+                db.session.execute(
+                    text("SELECT set_config('app.org_id', :org_id, true)"),
+                    {"org_id": str(org_id)},
+                )
+                facilities = db.session.scalars(
+                    select(Facility).where(Facility.organization_id == org_id)
+                ).all()
+                if not facilities:
+                    click.echo(f"no facilities found for org {org_id}")
+                    return
+
+                now = datetime.now(timezone.utc)
+                local_hour = (now.hour + _EAT_UTC_OFFSET_HOURS) % 24
+                is_daytime = 9 <= local_hour < 17
+                soc_target = _LIVE_SOC_DAY_TARGET if is_daytime else _LIVE_SOC_NIGHT_TARGET
+                panel_temp_target = (
+                    _LIVE_PANEL_TEMP_DAY_C if is_daytime else _LIVE_PANEL_TEMP_NIGHT_C
+                )
+
+                written = []
+                for facility in facilities:
+                    latest = db.session.scalars(
+                        select(SolarHealthReading)
+                        .where(SolarHealthReading.facility_id == facility.id)
+                        .order_by(SolarHealthReading.ts.desc())
+                        .limit(1)
+                    ).first()
+                    current_soc = float(latest.battery_soc_pct) if latest and latest.battery_soc_pct is not None else 60.0
+                    current_temp = float(latest.panel_temp_c) if latest and latest.panel_temp_c is not None else panel_temp_target
+
+                    soc = current_soc + rng.uniform(-1.2, 1.2) + (soc_target - current_soc) * _LIVE_SOC_REVERSION
+                    soc = round(min(_LIVE_SOC_MAX, max(_LIVE_SOC_MIN, soc)), 1)
+                    panel_temp_c = round(current_temp + (panel_temp_target - current_temp) * 0.3 + rng.uniform(-0.6, 0.6), 1)
+
+                    db.session.add(
+                        SolarHealthReading(
+                            facility_id=facility.id,
+                            ts=now,
+                            battery_soc_pct=soc,
+                            # Carried forward, not re-derived — see docstring.
+                            battery_soh_pct=(
+                                float(latest.battery_soh_pct)
+                                if latest and latest.battery_soh_pct is not None
+                                else None
+                            ),
+                            panel_status=latest.panel_status if latest else "normal",
+                            battery_status=latest.battery_status if latest else "normal",
+                            panel_temp_c=panel_temp_c,
+                            note=None,
+                            source_channel="seed",
+                        )
+                    )
+                    written.append(f"{facility.name} {soc:.1f}% SoC")
+
+                db.session.commit()
+                ticks += 1
+                click.echo(f"[{now.isoformat(timespec='seconds')}] " + "; ".join(written))
+                time.sleep(interval_s)
+        except KeyboardInterrupt:
+            click.echo(f"\nstopped after {ticks} reading(s) per facility")

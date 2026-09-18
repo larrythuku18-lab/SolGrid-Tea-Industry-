@@ -1,8 +1,13 @@
-import { formatMonthLabel } from "../lib/dates";
+import { smoothPath } from "../lib/chart";
+import { formatMonthLabel, parseIsoInstant } from "../lib/dates";
 import type { GenerationVsConsumptionPoint } from "../types/api";
 
 interface GenerationChartProps {
   points: GenerationVsConsumptionPoint[];
+  /** Time domain for the x axis, so a new month appearing doesn't rescale
+   * every bar already on the chart. Falls back to the data's own span. */
+  domainStart?: string;
+  domainEnd?: string;
 }
 
 const WIDTH = 720;
@@ -11,6 +16,9 @@ const PAD_LEFT = 54;
 const PAD_RIGHT = 16;
 const PAD_TOP = 16;
 const PAD_BOTTOM = 28;
+const MAX_BAR_WIDTH = 30;
+
+const ms = (iso: string) => parseIsoInstant(iso).getTime();
 
 function formatCompact(value: number): string {
   if (value >= 1000) return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
@@ -21,7 +29,7 @@ function formatCompact(value: number): string {
  * total electrical consumption (grid + diesel-equivalent + solar), plotted
  * to the same axis so the overlap — self-consumption — is visible directly
  * rather than left for the reader to compute from two separate numbers. */
-export function GenerationChart({ points }: GenerationChartProps) {
+export function GenerationChart({ points, domainStart, domainEnd }: GenerationChartProps) {
   if (points.length === 0) {
     return <div className="empty-state">No solar generation data for this period.</div>;
   }
@@ -29,15 +37,28 @@ export function GenerationChart({ points }: GenerationChartProps) {
   const plotWidth = WIDTH - PAD_LEFT - PAD_RIGHT;
   const plotHeight = HEIGHT - PAD_TOP - PAD_BOTTOM;
   const maxVal = Math.max(...points.map((p) => Math.max(p.generation_kwh, p.consumption_kwh)), 1);
-  const stepX = plotWidth / points.length;
-  const barWidth = Math.min(30, stepX * 0.45);
 
+  const midpointMs = (p: GenerationVsConsumptionPoint) => (ms(p.period_start) + ms(p.period_end)) / 2;
+  const startMs = domainStart ? ms(domainStart) : ms(points[0].period_start);
+  const endMs = Math.max(
+    domainEnd ? ms(domainEnd) : startMs,
+    ...points.map((p) => ms(p.period_end)),
+  );
+  const spanMs = Math.max(endMs - startMs, 1);
+
+  const xForMs = (value: number) => {
+    const ratio = (value - startMs) / spanMs;
+    return PAD_LEFT + Math.min(1, Math.max(0, ratio)) * plotWidth;
+  };
   const yFor = (v: number) => PAD_TOP + plotHeight - (v / maxVal) * plotHeight;
-  const xFor = (i: number) => PAD_LEFT + stepX * i + stepX / 2;
+  // Bars are as wide as the period they cover would suggest, capped so a
+  // single-month window doesn't produce one enormous bar. This is also what
+  // keeps a freshly-appended month from resizing the older ones.
+  const widthFor = (p: GenerationVsConsumptionPoint) =>
+    Math.max(3, Math.min(MAX_BAR_WIDTH, ((ms(p.period_end) - ms(p.period_start)) / spanMs) * plotWidth * 0.72));
 
-  const linePath = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${xFor(i).toFixed(1)} ${yFor(p.consumption_kwh).toFixed(1)}`)
-    .join(" ");
+  const linePath = smoothPath(points.map((p) => ({ x: xForMs(midpointMs(p)), y: yFor(p.consumption_kwh) })));
+  const lastPoint = points[points.length - 1];
 
   const gridFractions = [0, 0.25, 0.5, 0.75, 1];
 
@@ -62,25 +83,59 @@ export function GenerationChart({ points }: GenerationChartProps) {
           );
         })}
 
-        {points.map((p, i) => (
-          <rect
+        {points.map((p) => {
+          const barWidth = widthFor(p);
+          const x = xForMs(midpointMs(p)) - barWidth / 2;
+          return (
+            <rect
+              key={p.period_start}
+              x={x}
+              y={yFor(p.generation_kwh)}
+              width={barWidth}
+              height={Math.max(0, yFor(0) - yFor(p.generation_kwh))}
+              rx={2}
+              className="chart-bar"
+            />
+          );
+        })}
+
+        <path d={linePath} className="chart-line" fill="none" />
+        {points.map((p) => (
+          <circle
             key={p.period_start}
-            x={xFor(i) - barWidth / 2}
-            y={yFor(p.generation_kwh)}
-            width={barWidth}
-            height={Math.max(0, yFor(0) - yFor(p.generation_kwh))}
-            rx={2}
-            className="chart-bar"
+            cx={xForMs(midpointMs(p))}
+            cy={yFor(p.consumption_kwh)}
+            r={3.2}
+            className="chart-dot"
           />
         ))}
 
-        <path d={linePath} className="chart-line" fill="none" />
-        {points.map((p, i) => (
-          <circle key={p.period_start} cx={xFor(i)} cy={yFor(p.consumption_kwh)} r={3.2} className="chart-dot" />
-        ))}
+        {/* Newest period, marked the same way the health chart marks its
+            newest reading — same visual grammar for "this is the present". */}
+        <g key={`newest-${points.length}`}>
+          <line
+            className="chart-sweep"
+            x1={xForMs(midpointMs(lastPoint))}
+            x2={xForMs(midpointMs(lastPoint))}
+            y1={PAD_TOP}
+            y2={PAD_TOP + plotHeight}
+          />
+          <circle
+            cx={xForMs(midpointMs(lastPoint))}
+            cy={yFor(lastPoint.consumption_kwh)}
+            r={3.6}
+            className="chart-dot chart-dot-live"
+          />
+        </g>
 
-        {points.map((p, i) => (
-          <text key={p.period_start} x={xFor(i)} y={HEIGHT - 8} textAnchor="middle" className="chart-axis-label">
+        {points.map((p) => (
+          <text
+            key={p.period_start}
+            x={xForMs(midpointMs(p))}
+            y={HEIGHT - 8}
+            textAnchor="middle"
+            className="chart-axis-label"
+          >
             {formatMonthLabel(p.period_start)}
           </text>
         ))}

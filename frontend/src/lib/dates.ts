@@ -21,7 +21,43 @@ export function monthsBeforeIso(isoDate: string, months: number): string {
   return toIsoDate(d);
 }
 
+/** Parses either a bare `YYYY-MM-DD` (local midnight — `new Date("2026-09-16")`
+ * is UTC midnight, which rolls back a day in EAT) or a full ISO timestamp as
+ * the health endpoints send. Both shapes come back from this API. */
+export function parseIsoInstant(iso: string): Date {
+  if (iso.includes("T")) return new Date(iso);
+  const [year, month, day] = iso.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
 export function formatMonthLabel(isoDate: string): string {
-  const [year, month, day] = isoDate.split("-").map(Number);
-  return new Date(year, month - 1, day).toLocaleDateString("en-US", { month: "short" });
+  return parseIsoInstant(isoDate).toLocaleDateString("en-US", { month: "short" });
+}
+
+/** Day + time, for a reading timestamp on a live view — the month-alone
+ * label the charts use says nothing about whether a reading is current. */
+export function formatDateTime(iso: string): string {
+  return parseIsoInstant(iso).toLocaleString("en-US", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** "just now" / "45s" / "12m" / "3h 05m" / "2d". A bare age in seconds is
+ * unreadable at a glance, and "0.02758" seconds — a real value this API
+ * returns for a reading that just landed — is worse. */
+export function formatAge(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    const rem = minutes % 60;
+    return rem === 0 ? `${hours}h` : `${hours}h ${String(rem).padStart(2, "0")}m`;
+  }
+  return `${Math.floor(hours / 24)}d`;
 }

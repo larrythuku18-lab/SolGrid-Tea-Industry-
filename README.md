@@ -67,25 +67,43 @@ sequencing — see deviation #9 below for why, and **Solar monitoring
   `superseded_by`. Rejects (422) a `supersedes` id for a different
   facility/period, and (409) one that's already been superseded once.
 - **Solar monitoring** (`GET /api/v1/solar/generation`, `GET
-  /api/v1/solar/health`; migration `0002_solar_monitoring.py`) —
-  generation-vs-consumption reconciliation (solar generation against
-  total electrical load: grid + diesel-kWh-equivalent + solar) and
-  panel/battery health (state of charge, state of health, fault status)
-  with plain-code, deterministic insights — no model, same "no invented
-  assumptions" discipline as the scenario engine: an underperformance
-  insight compares a site against its own trailing history rather than
-  an assumed capacity factor. **Presentation data, not real telemetry**
-  — see deviation #9. `flask seed-solar-demo --org-id <id>` backfills it;
-  safe to re-run.
+  /api/v1/solar/health`, `GET /api/v1/solar/health/history`; migration
+  `0002_solar_monitoring.py`) — generation-vs-consumption reconciliation
+  (solar generation against total electrical load: grid +
+  diesel-kWh-equivalent + solar) and panel/battery health (state of
+  charge, state of health, fault status) with plain-code, deterministic
+  insights — no model, same "no invented assumptions" discipline as the
+  scenario engine: an underperformance insight compares a site against
+  its own trailing history rather than an assumed capacity factor.
+  **Presentation data, not real telemetry** — see deviation #9. `flask
+  seed-solar-demo --org-id <id>` backfills daily health readings and
+  monthly generation; safe to re-run.
+- **Live feed** (`GET /api/v1/solar/live`, `solgrid_tea/services/solar_live.py`)
+  — server-sent events over the same two tables the REST endpoints read.
+  Not a simulated tick: `flask seed-solar-live --org-id <id>` appends
+  real `solar_health_reading` rows on an interval (default 4s), and the
+  stream reports what has actually landed, when it lands — including a
+  freshness heartbeat on every poll so a viewer can tell a quiet site
+  from a dead connection (`is_stale`, `latest_health_age_s`). SSE over
+  `fetch`, not `EventSource` — `EventSource` can't carry the bearer
+  token this API authenticates with. Requires the app server to use
+  threaded/async workers (see `docker-entrypoint.sh`'s `gthread` note) —
+  a sync worker pool would be exhausted by a handful of open dashboard
+  tabs, since each holds its connection open between polls.
 - **Frontend** (`frontend/`) — React + TypeScript console covering all of
   the above: Overview, Ledger, Benchmark, Scenarios, Solar. Light theme
   with an M-Pesa-inspired green sidebar/primary-action color and white
   cards (Bricolage Grotesque + Hanken Grotesk + JetBrains Mono) — replaced
   the earlier dark plum/amber "Meridian" look at the user's request; see
-  `frontend/README.md`. The Solar page's generation-vs-consumption chart
-  is a hand-rolled SVG component (`GenerationChart.tsx`), not a charting
-  library — consistent with the frontend's existing minimal-dependency
-  approach (no data-fetching library either; see `frontend/README.md`).
+  `frontend/README.md`. Both Solar charts (`GenerationChart.tsx`,
+  `BatteryHistoryChart.tsx`) are hand-rolled SVG components, not a
+  charting library — consistent with the frontend's existing
+  minimal-dependency approach (no data-fetching library either; see
+  `frontend/README.md`). The battery chart merges REST-loaded history
+  with whatever the live stream has delivered since page load
+  (`useSolarLive`), with exponential-backoff reconnection and a
+  20s-silence watchdog independent of the browser noticing the socket
+  died.
 - **Realistic demo history** (`flask seed-demo-history --org-id <id>`) —
   backfills several months of directionally-realistic energy_reading +
   production_record data for every facility in an org (seasonal
@@ -176,6 +194,16 @@ and repeated here so it's not buried in code comments:
    matched period), so it's a separate table rather than overloading that
    one. Real ESP32 firmware and hardware remain unbuilt; this only adds
    the schema and read path so a real integration has somewhere to land.
+   Extended further still, also at explicit request: a real-time feed
+   (`GET /api/v1/solar/live`, §7's "Real-time: existing MQTT + Socket.io,
+   solar-generation path only") over the *same* synthetic table via
+   server-sent events, not the MQTT/Socket.io path §7 names — that path is
+   the other Lagriff/Smart-Solar product's device-reading infrastructure
+   (see §3's "DeviceReader already has three tiers"), which this repo has
+   no access to and no ESP32 traffic to carry yet. SSE was the honest
+   choice for what actually exists: real rows landing in Postgres,
+   pushed to an open connection, no message broker to stand up for
+   readings nothing is currently producing.
 
 ## Local setup
 
@@ -197,9 +225,17 @@ flask --app wsgi.py seed-demo-history --org-id <organization_id> --months 8
 flask --app wsgi.py seed-solar-demo --org-id <organization_id> --months 8
 
 flask --app wsgi.py run
+
+# Optional, in a second terminal — makes the Solar page's live badge
+# actually move by appending real rows on an interval:
+flask --app wsgi.py seed-solar-live --org-id <organization_id> --interval 4
 ```
 
-Run the full app via Docker instead with `docker compose up --build`.
+Run the full app via Docker instead with `docker compose up --build`. If
+you do, `docker-entrypoint.sh` already runs gunicorn with `gthread`
+workers — required for `GET /api/v1/solar/live` (see **What's built**);
+running the Flask dev server directly (`flask run`, as above) is
+threaded by default and needs no equivalent flag.
 
 **Before anything reaches an external report**: `seed-reference-data`
 deliberately seeds the Kenya grid `emission_factor` and the fuelwood
@@ -298,13 +334,18 @@ TimescaleDB extension, which this environment couldn't pull.
 
 - **SMS/USSD ingestion** via Africa's Talking — same `EnergyReadingCreate`
   schema, new blueprint, `source_channel='sms'`.
-- **Real ESP32 solar telemetry.** Solar monitoring itself is built (see
-  deviation #9 and **What's built**) but every reading behind it is
-  synthetic. Real hardware needs: ESP32 firmware pushing actual
-  `solar_generation` energy_reading rows and `solar_health_reading` rows
-  (`source_channel='esp32'` on both — the schema already has the slot),
-  and the real-time MQTT + Socket.io path §7 calls for once readings
-  arrive faster than the current period-based ledger cadence.
+- **Real ESP32 solar telemetry.** Solar monitoring itself is built, live
+  feed included (see deviation #9 and **What's built**), but every
+  reading behind it is synthetic (`seed-solar-demo` / `seed-solar-live`,
+  `source_channel='seed'`). What's missing is only the producer: ESP32
+  firmware writing `solar_generation` energy_reading rows and
+  `solar_health_reading` rows with `source_channel='esp32'` (the schema
+  already has the slot, and `GET /api/v1/solar/live` already streams
+  whatever lands in that table — a real device pushing rows needs no
+  changes on the read side at all). §7's MQTT + Socket.io path is the
+  other Lagriff/Smart-Solar product's ingestion infrastructure; whether
+  this module reuses it or keeps its own SSE feed once real hardware
+  exists is an open question, not a foregone one.
 - **Scenario explainer** (`SolGrid-Tea-AI-Prompts.md` §3) — prompt and
   tool contract written, not wired to any chat surface.
 - Frontend gaps: no facility-management beyond add (no edit/deactivate

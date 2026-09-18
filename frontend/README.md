@@ -24,6 +24,15 @@ console reference) at the user's explicit request — see `src/styles/theme.css`
   history (extrapolated to a full year if less than one is on file) —
   editable, not authoritative; see `useLatestPeriod` / the effect in
   `ScenarioPage.tsx`.
+- **Solar** — generation-vs-consumption and panel/battery health, backed
+  by a live feed (`useSolarLive`, SSE via `fetch` — see the root README's
+  "Live feed" entry) merged onto REST-loaded history. Charts
+  (`GenerationChart.tsx`, `BatteryHistoryChart.tsx`) are hand-rolled SVG,
+  not a charting library. The live badge states the *connection*, not
+  the data — it can be green while the underlying data is stale (the
+  page says so separately, via `freshness.is_stale`) and amber only while
+  actively reconnecting. **Presentation data, not real telemetry** — see
+  the root README's deviation #9.
 
 Overview and Benchmark default to the facility's most recent
 production-record period rather than the current calendar month — a

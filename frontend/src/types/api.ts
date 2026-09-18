@@ -121,6 +121,7 @@ export interface GenerationVsConsumptionSeries {
 }
 
 export interface SolarHealthLatest {
+  /** ISO timestamp, not a date — see SolarHealthPoint below. */
   ts: string;
   battery_soc_pct: number | null;
   battery_soh_pct: number | null;
@@ -140,6 +141,54 @@ export interface SolarHealthSummary {
   latest: SolarHealthLatest | null;
   battery_soh_trend_pct: number | null;
   insights: SolarInsight[];
+}
+
+export interface SolarHealthPoint {
+  /** ISO timestamp. Deliberately not truncated to a date: the health chart
+   * is appended to by a live feed, and two readings in one day have to land
+   * at different x positions. */
+  ts: string;
+  battery_soc_pct: number | null;
+  battery_soh_pct: number | null;
+}
+
+// ---------- realtime feed (GET /api/v1/solar/live) ----------
+
+export interface SolarLiveFreshness {
+  server_ts: string;
+  latest_health_ts: string | null;
+  /** Seconds since that reading on the server's clock; null when the
+   * facility has never reported. */
+  latest_health_age_s: number | null;
+  is_stale: boolean;
+}
+
+/** Sent once per connection, so a viewer isn't staring at an empty panel
+ * while waiting for the next reading. Carries summaries, not raw history —
+ * that came from the REST endpoints. */
+export interface SolarLiveSnapshot {
+  facility_id: string;
+  health: SolarHealthSummary;
+  series: GenerationVsConsumptionSeries;
+  freshness: SolarLiveFreshness;
+}
+
+export interface SolarLiveHealthUpdate {
+  /** New readings since the previous event, oldest first. */
+  points: SolarHealthPoint[];
+  health: SolarHealthSummary;
+  freshness: SolarLiveFreshness;
+}
+
+export interface SolarLiveSeriesUpdate {
+  series: GenerationVsConsumptionSeries;
+  freshness: SolarLiveFreshness;
+}
+
+/** Heartbeat: no new data, just proof the stream is alive and how long since
+ * the site last reported. */
+export interface SolarLiveTick {
+  freshness: SolarLiveFreshness;
 }
 
 export interface Me {

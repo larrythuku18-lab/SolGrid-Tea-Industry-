@@ -61,6 +61,99 @@ interface RequestOptions {
   query?: Record<string, string | undefined>;
 }
 
+interface EventStreamOptions {
+  query?: Record<string, string | undefined>;
+  signal?: AbortSignal;
+  onOpen?: () => void;
+  onEvent: (event: string, data: unknown) => void;
+}
+
+/** Splits one `event:`/`data:` frame. Returns null for anything without a
+ * data line (a bare `:keepalive` comment, a retry hint, or a malformed
+ * payload) — dropping a frame we can't read is better than tearing down a
+ * live view over it. */
+function parseEventFrame(frame: string): { event: string; data: unknown } | null {
+  let event = "message";
+  const dataLines: string[] = [];
+  for (const line of frame.split("\n")) {
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+  }
+  if (dataLines.length === 0) return null;
+  try {
+    return { event, data: JSON.parse(dataLines.join("\n")) as unknown };
+  } catch {
+    return null;
+  }
+}
+
+/** Server-sent events over fetch rather than EventSource: EventSource can't
+ * send an Authorization header, and this API authenticates with a bearer
+ * token (see the auth note in frontend/README.md). Same one-shot 401
+ * refresh as apiRequest, for the same reason.
+ *
+ * Resolves when the server closes the stream, and rejects on transport
+ * failure. Reconnecting is left to the caller — only it knows whether a
+ * given failure is worth retrying and how long to wait. */
+export async function openEventStream(
+  path: string,
+  options: EventStreamOptions,
+  allowRetry = true,
+): Promise<void> {
+  const url = new URL(path, API_BASE_URL);
+  if (options.query) {
+    for (const [key, value] of Object.entries(options.query)) {
+      if (value !== undefined) url.searchParams.set(key, value);
+    }
+  }
+
+  const access = getAccessToken();
+  const res = await fetch(url.toString(), {
+    headers: {
+      Accept: "text/event-stream",
+      ...(access ? { Authorization: `Bearer ${access}` } : {}),
+    },
+    signal: options.signal,
+  });
+
+  if (res.status === 401 && allowRetry && access) {
+    if (await refreshAccessToken()) {
+      return openEventStream(path, options, false);
+    }
+    clearTokens();
+    onSessionExpired?.();
+    throw new ApiError(401, "session expired", null);
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, res.statusText, null);
+  }
+  if (!res.body) {
+    throw new ApiError(0, "this browser can't stream responses", null);
+  }
+
+  options.onOpen?.();
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Frames are separated by a blank line; keep the remainder buffered, a
+    // chunk can (and regularly does) land mid-frame.
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const frame = parseEventFrame(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      if (frame) options.onEvent(frame.event, frame.data);
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
+}
+
 export async function apiRequest<T>(
   path: string,
   options: RequestOptions = {},

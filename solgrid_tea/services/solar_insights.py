@@ -14,7 +14,7 @@ verified for either factory.
 """
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -25,6 +25,7 @@ from solgrid_tea.schemas.solar import (
     GenerationVsConsumptionPoint,
     GenerationVsConsumptionSeries,
     SolarHealthLatest,
+    SolarHealthPoint,
     SolarHealthSummary,
     SolarInsight,
 )
@@ -38,6 +39,10 @@ _LOW_SOC_WARN_THRESHOLD_PCT = 25.0
 _SOH_CRITICAL_THRESHOLD_PCT = 70.0
 _SOH_WARN_THRESHOLD_PCT = 85.0
 _SOH_FAST_DEGRADATION_DROP_PCT = 3.0
+# How far back "recent" means for the low-state-of-charge check — short on
+# purpose. Readings arrive roughly daily; averaging that over the whole
+# trailing_days window (months) would blur past a real short-term problem.
+_RECENT_SOC_WINDOW_DAYS = 14
 
 
 def generation_vs_consumption_series(
@@ -114,7 +119,9 @@ def _generation_insight(points: list[GenerationVsConsumptionPoint]) -> SolarInsi
 
 
 def _health_insights(
-    latest: SolarHealthReading, trend_pct: float | None, readings: list[SolarHealthReading]
+    latest: SolarHealthReading,
+    trend_pct: float | None,
+    recent_readings: list[SolarHealthReading],
 ) -> list[SolarInsight]:
     insights: list[SolarInsight] = []
 
@@ -166,7 +173,9 @@ def _health_insights(
             )
         )
 
-    soc_readings = [float(r.battery_soc_pct) for r in readings if r.battery_soc_pct is not None]
+    soc_readings = [
+        float(r.battery_soc_pct) for r in recent_readings if r.battery_soc_pct is not None
+    ]
     if soc_readings:
         avg_soc = sum(soc_readings) / len(soc_readings)
         if avg_soc < _LOW_SOC_WARN_THRESHOLD_PCT:
@@ -187,21 +196,27 @@ def solar_health_summary(
     session: Session,
     facility_id: UUID,
     as_of: date,
-    trailing_count: int = 6,
+    trailing_days: int = 180,
 ) -> SolarHealthSummary:
+    """`trailing_days` is a time window, not a row count — readings arrive
+    roughly daily (see seed-solar-demo), so a fixed row LIMIT would silently
+    shrink the window whenever the seeding cadence changes. A date range
+    keeps the SoH trend meaningful (real months of history) regardless."""
+    window_start_ts = datetime.combine(as_of - timedelta(days=trailing_days), time.min, tzinfo=timezone.utc)
+    next_day_ts = datetime.combine(as_of + timedelta(days=1), time.min, tzinfo=timezone.utc)
     readings = list(
         session.scalars(
             select(SolarHealthReading)
             .where(
                 SolarHealthReading.facility_id == facility_id,
+                SolarHealthReading.ts >= window_start_ts,
                 # ts is a timestamptz reading, as_of is a plain date — compare
                 # against the start of the *next* day so a same-day reading
                 # taken later than midnight (e.g. a noon snapshot) isn't
                 # excluded by an implicit midnight cast of as_of.
-                SolarHealthReading.ts < as_of + timedelta(days=1),
+                SolarHealthReading.ts < next_day_ts,
             )
             .order_by(SolarHealthReading.ts.desc())
-            .limit(trailing_count)
         ).all()
     )
 
@@ -216,7 +231,9 @@ def solar_health_summary(
     if latest.battery_soh_pct is not None and oldest.battery_soh_pct is not None:
         trend_pct = float(latest.battery_soh_pct) - float(oldest.battery_soh_pct)
 
-    insights = _health_insights(latest, trend_pct, readings)
+    recent_cutoff = latest.ts - timedelta(days=_RECENT_SOC_WINDOW_DAYS)
+    recent_readings = [r for r in readings if r.ts >= recent_cutoff]
+    insights = _health_insights(latest, trend_pct, recent_readings)
 
     # Generation-trend insight draws on a wider window than the health
     # readings — a year of monthly ledger periods, not just the last few
@@ -241,7 +258,10 @@ def solar_health_summary(
     return SolarHealthSummary(
         facility_id=facility_id,
         latest=SolarHealthLatest(
-            ts=latest.ts.date() if hasattr(latest.ts, "date") else latest.ts,
+            # Kept as the full timestamp, not truncated to a date: the Solar
+            # page plots this as the newest point on a chart that a live feed
+            # appends to, and a date would collapse a day of readings.
+            ts=latest.ts,
             battery_soc_pct=float(latest.battery_soc_pct) if latest.battery_soc_pct is not None else None,
             battery_soh_pct=float(latest.battery_soh_pct) if latest.battery_soh_pct is not None else None,
             panel_status=latest.panel_status,
@@ -252,3 +272,30 @@ def solar_health_summary(
         battery_soh_trend_pct=trend_pct,
         insights=insights,
     )
+
+
+def solar_health_history(
+    session: Session, facility_id: UUID, period_start: date, period_end: date
+) -> list[SolarHealthPoint]:
+    """The raw SoC/SoH time series for a chart — as many readings as exist
+    in the window (daily, per seed-solar-demo), not reduced to one number
+    per month like the ledger-backed generation series."""
+    window_start_ts = datetime.combine(period_start, time.min, tzinfo=timezone.utc)
+    window_end_ts = datetime.combine(period_end + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    readings = session.scalars(
+        select(SolarHealthReading)
+        .where(
+            SolarHealthReading.facility_id == facility_id,
+            SolarHealthReading.ts >= window_start_ts,
+            SolarHealthReading.ts < window_end_ts,
+        )
+        .order_by(SolarHealthReading.ts.asc())
+    ).all()
+    return [
+        SolarHealthPoint(
+            ts=r.ts,
+            battery_soc_pct=float(r.battery_soc_pct) if r.battery_soc_pct is not None else None,
+            battery_soh_pct=float(r.battery_soh_pct) if r.battery_soh_pct is not None else None,
+        )
+        for r in readings
+    ]
